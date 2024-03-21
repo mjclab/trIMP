@@ -1122,8 +1122,9 @@ else
 
 
 // set some variables global
-var compartment = newArray("nuc", "band");  // code is designed around this. Some changes needed if this is modified
-var parameters_collected_per_channel=6; //this is cyt, nuc, cytbynuc and Norm versions of each
+var compartment = newArray("nuc", "band", "soma");  // code is designed around this. Some changes needed if this is modified
+// 20240320 added "soma" but check if it exists every time as it depends on earlier analysis settings
+var parameters_collected_per_channel=6; //this is cyt, nuc, cytbynuc and Norm versions of each. SHould be 8 now?
 
 if((WindowTimecourse) *(BaselineReads>TimeWindowStep))
 	{BaselineReads=TimeWindowStep; //BaselineReads>TimeWindowStep is not possible to interpret
@@ -1554,8 +1555,8 @@ function AnalyseCurrentRun(experimentpath, L_CurrentRunDateStamp, L_ParameterSet
 							{
 							print(printformatter + "Seeking " +  Timewindow + " merged image "+ CurrentWell + " at "+ MergedDataPath); if(Verbosity>1) print("");
 							if(File.exists(MergedDataPath +"Merged"+CurrentWell+".tif"))  //does not need wellpaths, the processed tiffs are sufficient
-								{
-								//hard coded here
+								{				
+//DEBUG								//hard coded here
 								cytoChannel=2; //EDIT - need to free this up for user access
 								SegmentImages(SegmentationChannel, cytoChannel,CalciumChannel, UseExistingROIs, UseStarDist, CurrentWell, AlignmentFolder,
 												experimentpath, SegmentationFolder, SegmentationSettings, ErodeCycles, 
@@ -2356,453 +2357,486 @@ exec("cmd", "/c", "move", targetfiles, L_path+from_ext);
 
 
 //******** FUNCTION SegmentImages
-
-
 function SegmentImages(L_SegmentationChannel, L_cytoChannel, L_CalciumChannel, L_UseExistingROIs, L_UseStarDist, well, L_AlignmentFolder,
  L_experimentpath, L_SegmentationFolder, L_SegmentationSettings, L_ErodeCycles, L_BandWidth, 
  UseNoOverlapBands, Group,L_SignalNamesRGB, NumT, FirstT, L_MaxROIs, reportstarted, L_SegmentReportFile) 
 //version e for IJ1.51w; this function uses newly generated files by the preprocess function if they were left open
-{
-//print("called SegmentImages"); print("");
-//setBatchMode(true);  should be done around both process and segment so that images are passed silently
-if (SegmentationChannel==-1) FatalError("You have not defined a channel for segmentation (channel = -1) but still asked to segment. Please check your settings.");
-
-
-//hard-coded data collection option here 
-// List keys values is more silent but ~5 x slower than using Results table (e.g. up to 4 seconds for 750 timepoints of 50 ROI means)
-// Results table The latter can flash on the screen but we can position it off the screen so there is no flashing
-// process can occasionally be interrupted by key press if trying to work on something else, is it related to this? Not sure, need to test (MJC 2022-11-14)
-// Will collect shape parameters both ways because keys give 35 parameters and I have been using 26 -> need to check if the bigger table breaks downstream analaysis
-
-DataCollectionOption = "ResultsTable"; //"ResultsTable" || "List"
-
-
-if( NumT !=0) L_WindowTimecourse=true;
-else L_WindowTimecourse=false;
-if(L_WindowTimecourse) L_Timewindow = "Window_"+FirstT+"to"+FirstT+NumT-1+ File.separator;
-else L_Timewindow="";
-
-//create the main segementation folder for the segmentation report file at least
-if (!File.exists( L_experimentpath + L_SegmentationFolder)) File.makeDirectory( L_experimentpath + L_SegmentationFolder);  // this is either the only folder or the upper level for window subfolders	
-
-//Generate Report
-//reportfile=L_experimentpath + L_SegmentationFolder+File.separator+"Segmentation"+DateStampstring()+".txt";   //Merged files will overwrite so there's no point making a unique ID
-if (!reportstarted) File.saveString("Segmenting Data - starting/version "+VersionNumber+ " using IJ version " + IJVersionRunning + "\r\n"+ "\r\n",L_SegmentReportFile);
-else  File.append("\r\n",L_SegmentReportFile); 
-File.append("Time Window="+L_Timewindow+ "\r\n", L_SegmentReportFile);
-File.append("well="+well+ "\r\n", L_SegmentReportFile);
-File.append("L_experimentpath="+L_experimentpath+ "\r\n", L_SegmentReportFile);
-File.append("Alignment Folder="+L_AlignmentFolder+ "\r\n", L_SegmentReportFile);
-File.append("L_SegmentationFolder="+L_SegmentationFolder+ "\r\n", L_SegmentReportFile);
-File.append("L_UseStarDist="+L_UseStarDist+ "\r\n", L_SegmentReportFile);
-File.append("Channel used for Segmentation="+L_SegmentationChannel+ "\r\n", L_SegmentReportFile);
-  SegmentationSettingLabels = newArray("post srqt RB value", "min size", "max size", "smoothing", "watershed", "force square root on single snap");
-for(i=0;i<L_SegmentationSettings.length;i++) File.append("L_SegmentationSettings["+i+"],"+SegmentationSettingLabels[i]+"="+L_SegmentationSettings[i] + ", ", L_SegmentReportFile);
-File.append("\r\n", L_SegmentReportFile);
-File.append("ErodeCycles to separate nuclei and cytoplasm="+L_ErodeCycles+ "\r\n", L_SegmentReportFile);
-File.append("Width of band for collecting cytoplasm signal="+L_BandWidth+ "\r\n", L_SegmentReportFile);
-File.append("Group="+Group+ "\r\n", L_SegmentReportFile);
-File.append("Analysing by time window?="+WindowTimecourse+ "\r\n", L_SegmentReportFile);
-File.append("Number of Timepoints in current window="+NumT+ "\r\n", L_SegmentReportFile);
-File.append("First Timepoint in current window="+FirstT+ "\r\n", L_SegmentReportFile);
-File.append("Max number of ROIs permitted="+L_MaxROIs+ "\r\n", L_SegmentReportFile);
-
-//end report
-if (isOpen("ROI Manager")) {selectWindow("ROI Manager"); run("Close");}
-if (isOpen("Results")) { selectWindow("Results"); run("Close");} 
-
-				
-//define save path that includes window info if needed
-SavePath = L_experimentpath + L_SegmentationFolder+ File.separator + L_Timewindow; if (!File.exists(SavePath)) File.makeDirectory(SavePath);  
-print(""); print( L_experimentpath + L_SegmentationFolder); 
-
-MergedFile = L_experimentpath + L_AlignmentFolder+L_Timewindow + "Merged"+well+".tif";
-FastCa = L_experimentpath + L_AlignmentFolder+L_Timewindow + "FastCa"+well+".tif";
-//CurrentTimewindowDir = L_experimentpath+ "Window_"+FirstT+"to"+FirstT+NumT-1 + File.separator;
-//CurrentTimewindowDir = L_experimentpath; //so use CurrentTimewindowDir even if there is one (i.e. no) windowing.
+	{
+//compartment is a global array		
+	//band_width =L_BandWidth;//1; // this is in calibrated units (um) - since v5d29f, it is  a modifiable parameter
+	//print("called SegmentImages"); print("");
+	//setBatchMode(true);  should be done around both process and segment so that images are passed silently
+	if (SegmentationChannel==-1) FatalError("You have not defined a channel for segmentation (channel = -1) but still asked to segment. Please check your settings.");
 	
-
-
-print(printformatter+ "Segmenting channel #" +L_SegmentationChannel + " of well " + CurrentWell + " at "+ MergedFile); 	
 	
-if (Verbosity >2) print("Path used for saving is "+ SavePath);	
+	//hard-coded data collection option here 
+	// List keys values is more silent but ~5 x slower than using Results table (e.g. up to 4 seconds for 750 timepoints of 50 ROI means)
+	// Results table The latter can flash on the screen but we can position it off the screen so there is no flashing
+	// process can occasionally be interrupted by key press if trying to work on something else, is it related to this? Not sure, need to test (MJC 2022-11-14)
+	// Will collect shape parameters both ways because keys give 35 parameters and I have been using 26 -> need to check if the bigger table breaks downstream analaysis
+	
+	DataCollectionOption = "ResultsTable"; //"ResultsTable" || "List"	
+	
+	if( NumT !=0) L_WindowTimecourse=true;
+		else L_WindowTimecourse=false;
+	if(L_WindowTimecourse) L_Timewindow = "Window_"+FirstT+"to"+FirstT+NumT-1+ File.separator;
+		else L_Timewindow="";
+	
+	 //create the main segementation folder for the segmentation report file at least
+	if (!File.exists( L_experimentpath + L_SegmentationFolder)) File.makeDirectory( L_experimentpath + L_SegmentationFolder);  // this is either the only folder or the upper level for window subfolders	
+
+//debug
+	
+	//Generate Report
+	//reportfile=L_experimentpath + L_SegmentationFolder+File.separator+"Segmentation"+DateStampstring()+".txt";   //Merged files will overwrite so there's no point making a unique ID
+	if (!reportstarted) File.saveString("Segmenting Data - starting/version "+VersionNumber+ " using IJ version " + IJVersionRunning + "\r\n"+ "\r\n",L_SegmentReportFile);
+	else  File.append("\r\n",L_SegmentReportFile); 
+	File.append("Time Window="+L_Timewindow+ "\r\n", L_SegmentReportFile);
+	File.append("well="+well+ "\r\n", L_SegmentReportFile);
+	File.append("L_experimentpath="+L_experimentpath+ "\r\n", L_SegmentReportFile);
+	File.append("Alignment Folder="+L_AlignmentFolder+ "\r\n", L_SegmentReportFile);
+	File.append("L_SegmentationFolder="+L_SegmentationFolder+ "\r\n", L_SegmentReportFile);
+	File.append("L_UseStarDist="+L_UseStarDist+ "\r\n", L_SegmentReportFile);
+	File.append("Channel used for Segmentation="+L_SegmentationChannel+ "\r\n", L_SegmentReportFile);
+	  SegmentationSettingLabels = newArray("post srqt RB value", "min size", "max size", "smoothing", "watershed", "force square root on single snap");
+	for(i=0;i<L_SegmentationSettings.length;i++) File.append("L_SegmentationSettings["+i+"],"+SegmentationSettingLabels[i]+"="+L_SegmentationSettings[i] + ", ", L_SegmentReportFile);
+	File.append("\r\n", L_SegmentReportFile);
+	File.append("ErodeCycles to separate nuclei and cytoplasm="+L_ErodeCycles+ "\r\n", L_SegmentReportFile);
+	File.append("Width of band for collecting cytoplasm signal="+L_BandWidth+ "\r\n", L_SegmentReportFile);
+	File.append("Group="+Group+ "\r\n", L_SegmentReportFile);
+	File.append("Analysing by time window?="+WindowTimecourse+ "\r\n", L_SegmentReportFile);
+	File.append("Number of Timepoints in current window="+NumT+ "\r\n", L_SegmentReportFile);
+	File.append("First Timepoint in current window="+FirstT+ "\r\n", L_SegmentReportFile);
+	File.append("Max number of ROIs permitted="+L_MaxROIs+ "\r\n", L_SegmentReportFile);
+	
+	//end report
+	if (isOpen("ROI Manager")) {selectWindow("ROI Manager"); run("Close");}
+	if (isOpen("Results")) { selectWindow("Results"); run("Close");} 
+//debug
+
+
+	
+			
+	//define save path that includes window info if needed
+	SavePath = L_experimentpath + L_SegmentationFolder+ File.separator + L_Timewindow; if (!File.exists(SavePath)) File.makeDirectory(SavePath);  
+	print(""); print( L_experimentpath + L_SegmentationFolder); 
+		
+	MergedFile = L_experimentpath + L_AlignmentFolder+L_Timewindow + "Merged"+well+".tif";
+	
+	FastCa = L_experimentpath + L_AlignmentFolder+L_Timewindow + "FastCa"+well+".tif";
+	print(printformatter+ "Segmenting channel #" +L_SegmentationChannel + " of well " + CurrentWell + " at "+ MergedFile); 	
+		
+	if (Verbosity >2) print("Path used for saving is "+ SavePath);	
+
 
 // check if needed images are already open
-if (!isOpen("Merged"+well+".tif"))
-	{
-	if (File.exists(MergedFile) != 1) {print(MergedFile + " does not exist. Will try next well."); return 0;} // skip to next well
-	open(MergedFile);
-	}
-
-
-//Step 1 - find the ROIs
-selectWindow("Merged"+well+".tif");	
-ImageWidth= getWidth(); ImageHeight = getHeight(); //needed later to identify zero-size bad ROIs
-
-if(Channels!=1) 
-	run("Split Channels");
-else
-  rename("C1-Merged"+well+".tif");
-
-// maxproj function handling 1-n frames, tagged as nuclei or cyto
-targetimage= "C" + L_SegmentationChannel + "-Merged" + well + ".tif";
-returnMaxProjection(targetimage, "nuclei"); //selectWindow("C" + L_SegmentationChannel + "-Merged" + well + ".tif");
-
-
-function returnMaxProjection(target, L_compartment)
-	{
-	selectWindow(target);
-	nFramestoSegment=nSlices;
-	if (nFramestoSegment!=1) //catch error when there happens to be only a single plane in the experiment 
+	if (!isOpen("Merged"+well+".tif"))
 		{
-		run("Z Project...", "projection=[Max Intensity]");rename("MAXproj_"+L_compartment);
+		if (File.exists(MergedFile) != 1) {print(MergedFile + " does not exist. Will try next well."); return 0;} // skip to next well
+		open(MergedFile);
 		}
+	
+	
+	//Step 1 - find the ROIs
+	selectWindow("Merged"+well+".tif");	
+	ImageWidth= getWidth(); ImageHeight = getHeight(); //needed later to identify zero-size bad ROIs
+	
+	if(Channels!=1) 
+		run("Split Channels");
 	else
+	  rename("C1-Merged"+well+".tif");
+	
+	// maxproj function handling 1-n frames, tagged as nuclei or cyto
+	targetimage= "C" + L_SegmentationChannel + "-Merged" + well + ".tif";
+	returnMaxProjection(targetimage, "nuclei"); //selectWindow("C" + L_SegmentationChannel + "-Merged" + well + ".tif");
+	
+	
+	function returnMaxProjection(target, L_compartment)
 		{
-		run("Select All"); run("Duplicate...", "title=MAXproj_"+L_compartment);
-		//if(CondenseFactor==1) run("Duplicate...", "title=SubstituteForFastCalcium");//if there is only one timepoint then the "max projection" was actually a simple copy and it will do here too
-		//this is addressed later, it is not appropriate here because segmentation channel may not be calcium
-		}
-	}	
-
-if(!L_UseExistingROIs)
-	{
-			
-		
-	//THE ROIs ARE GENERATED HERE. If we want to use old ROIs already saved, then we skip this section.	
-	selectWindow("MAXproj_nuclei");	
-	getDimensions(imagewidth, imageheight, mergechannels, slices, frames); 
-	nFramestoSegment=nSlices;
-		
-	ForceSquareRoot = L_SegmentationSettings[5];	// square root can even out cell intensities across image 
-	//don't run square root if source image is noisy - here deciding based on input files >1 as it is conserved for whole dataset. Could be based on image but it might chnage from one to next..
-		
-	if (CalciumChannel != -1) 
-		{NumberOfSourceFrames =CondenseFactor*nFramestoSegment;}
-	else 
-		{NumberOfSourceFrames=nFramestoSegment;} // if no calcium channel, Condensefactor may have been ignored and not set
-
-		
-		//Now ForceSquareRoot is +1 on,  0 default or -1 prevent. Default isoff for single frame and off for StarDist and, for conventional, on unless single frame
-		SquareRootTheImage = ((!L_UseStarDist && NumberOfSourceFrames!=1 && ForceSquareRoot==0)  || (ForceSquareRoot==1));
-		if(SquareRootTheImage) run("Square Root"); //this generates 1E3+ROIs from noisy single image conventionally, cannot be used
-		smooth = L_SegmentationSettings[3];// smooth = "median_radius3"; or 5  // User selected because depends on Compression as well, if this is <5 then we likely need this.
-		saveAs("Tiff", SavePath + "Segmentation"+well+".tif"); //  now save the segmentation image
-		rename("MAXproj_nuclei");
-		
-		
-		band_width =L_BandWidth;//1; // this is in calibrated units (um) - since v5d29f, it is  a modifiable parameter
-
-///* DEBUG	
-		if (!L_UseStarDist)
+		selectWindow(target);
+		nFramestoSegment=nSlices;
+		if (nFramestoSegment!=1) //catch error when there happens to be only a single plane in the experiment 
 			{
-			//be sure scale properties are correct so band is going to be 1 pixel not 1 inch wide! Needs PixelSizePostBin
-			//run("Properties...", "channels=1 slices=1 frames="+nSlices+" unit=um pixel_width="+PixelSizePostBin +" pixel_height="+PixelSizePostBin +" voxel_depth=1 frame=[1 min]");	
-			Watershed= L_SegmentationSettings[4];
-			getNuclearROI(L_SegmentationSettings[1], L_SegmentationSettings[2], "MAXproj_nuclei", smooth, L_SegmentationSettings[0], Watershed);
+			run("Z Project...", "projection=[Max Intensity]");rename("MAXproj_"+L_compartment);
 			}
 		else
 			{
-			getPixelSize(unit, pixelWidth, pixelHeight);
-			// Stardist was defining ROIs over the edge, crashing the make band, even with excludeBoundary 2 or half of the sqrt(max size)+ some. THerefore added to the removal filter
-			MaxBoundaryProximity= 2;//*(1+floor((Math.sqrt(L_SegmentationSettings[2])/2)/pixelWidth));//4 + 1+floor((Math.sqrt(L_SegmentationSettings[2])/2)/pixelWidth);
-			args="['input':'MAXproj_nuclei', 'modelChoice':'Versatile (fluorescent nuclei)', 'normalizeInput':'true', 'percentileBottom':'1.0','percentileTop':'99.8',";
-			args=args+"'probThresh':'0.5', 'nmsThresh':'0.0', 'outputType':'ROI Manager', 'nTiles':'1',	'excludeBoundary':'" + MaxBoundaryProximity + "',";
-			args=args+" 'roiPosition':'Automatic', 'verbose':'false','showCsbdeepProgress':'false', 'showProbAndDist':'false'], process=[false]";
-			run("Command From Macro", "command=[de.csbdresden.stardist.StarDist2D], args="+args);
-			selectWindow("MAXproj_nuclei");
-			// remove ROIs that fail to satisfy criteria 
-			// i) user-defined size constraints (in um^2)
-			// ii) all points far enough from edge that the make band will not crash the script
-			UnFilteredROIs = roiManager("count");
-			print("UnfilteredROIs detected by stardist="+UnFilteredROIs);
-			xminLimit= 0;//+1+floor(band_width/pixelWidth);
-			yminLimit=xminLimit;
-			xmaxLimit=imagewidth-1;//+floor(band_width/pixelWidth);
-			ymaxLimit=imageheight-1;//+floor(band_width/pixelHeight);
-			ROIsOutOfBounds=0; ROIsTooLarge=0;ROIsTooSmall=0;
-		
-			for (ROI=UnFilteredROIs; ROI >0; ROI--)
-				{
-				roiManager("Select", ROI-1); //first is "0", starting at last so no renumbering issues in deletion
-				//checking all settings first to permit the else if series here; could be faster to define functions to call only as needed?
-				getSelectionBounds(xmin, ymin,w,h); xmax=xmin+w; ymax=ymin+h; //about 20% faster than using getStatistics
-				area=getValue("Area"); //this is in calbrated units in image properties)
-				if ((xmin<xminLimit) || (xmax>xmaxLimit)) {ROIsOutOfBounds++; roiManager("Delete");}
-				else if (ymin<yminLimit || ymax>ymaxLimit) {ROIsOutOfBounds++; roiManager("Delete");}
-				else if ((area > L_SegmentationSettings[2])) {ROIsTooLarge ++; roiManager("Delete");}
-				else if ((area < L_SegmentationSettings[1])) {ROIsTooSmall ++; roiManager("Delete");}
-				//else print(ROI, xmin,xmax, ymin, ymax);
-				}
-			if (ROIsOutOfBounds !=0) print("Removed " + ROIsOutOfBounds + " ROIs from stardist that had pixels over the edge of the image");
-			print("Removed " + ROIsTooLarge + " ROIs identified by stardist that were larger than user-specified size limits");
-			print("Removed " + ROIsTooSmall + " ROIs identified by stardist that were smaller than user-specified size limits");	
-			}	
-		FilteredROIs = roiManager("count"); print("Remaining ROIs="+FilteredROIs);
-	
-
-	//save Original ROI set - this is all possible ROIs obtained from the calcium probe localised to the nucleus.
-	// later these ROIs will be shrunk and some ROIs will be discarded, the remaining ROIs will be used to generate cytoplasm bands that correspond to the nuclear zones
-	//so the number of ROIs in the original set is higher than the others
-	// a "trimmed" version is saved that has the surviving ROIs at original size
-
-		OriginalNumberOfROIs = roiManager("count");  // if this is too many, save the list for the record but make a decision after
-		if (OriginalNumberOfROIs > L_MaxROIs) 
-			{	
-			roiManager("reset"); // choice here either limit to max or quit
-			OriginalNumberOfROIs=0;
-			print("More ROIs than the limit you set, something is probably wrong with the settings. The list was set to zero");
+			run("Select All"); run("Duplicate...", "title=MAXproj_"+L_compartment);
+			//if(CondenseFactor==1) run("Duplicate...", "title=SubstituteForFastCalcium");//if there is only one timepoint then the "max projection" was actually a simple copy and it will do here too
+			//this is addressed later, it is not appropriate here because segmentation channel may not be calcium
 			}
+		}	
+
+	if(!L_UseExistingROIs)
+		{			
+//debug
 		
-		if (Verbosity >1) print(OriginalNumberOfROIs + " ROIs found in well " + well);
-		
-		if (Verbosity >3) print("Starting with " + roiManager("Count") + " ROIs"); 
-		if (OriginalNumberOfROIs==0) {
-				if (isOpen("ROI Manager")) {selectWindow("ROI Manager"); run("Close");}
-				print("There are no ROIs detected for well " + well + " in " + MergedFile  + ". Moving to next well."); 			
-				run("Close All"); 
-				//setBatchMode(false);  handled in calling function
-				return 0;
-					}	
-					
-		if (OriginalNumberOfROIs!=0)
-			{
-			roiManager("Save", SavePath + "ROIoriginal"+well+".zip");
-			if (Verbosity >3) print(SavePath + "ROIoriginal"+well+".zip");
-			}
+		//THE ROIs ARE GENERATED HERE. If we want to use old ROIs already saved, then we skip this section.	
+		selectWindow("MAXproj_nuclei");	
+		getDimensions(imagewidth, imageheight, mergechannels, slices, frames); 
+		nFramestoSegment=nSlices;
 			
-		NumberOfROIsRemaining = OriginalNumberOfROIs;
-
-		//for (ROI=0; ROI<OriginalNumberOfROIs;  ROI++) // loop to first check nuclear ROIs
-
-		for (ROI=OriginalNumberOfROIs; ROI >0; ROI--)
-			{			
-			selectWindow("MAXproj_nuclei");
-			currentROI = ROI-1;//ROI-(OriginalNumberOfROIs-NumberOfROIsRemaining);//if ROIs are deleted the current position should reflect that the remaining ROIs have moved up the list
-			roiManager("select", currentROI);
-			if (Verbosity >3) {print("creating mask from ROI #"+currentROI); print("there are now " +roiManager("count")+ " ROIs in the list"); }
-			run("Create Mask"); //selectWindow("Mask");
-			for (i=0; i< L_ErodeCycles; i++) run("Erode");//erode has to be on 8 bit image and cannot directy operate on ROI selection
-			run("Create Selection"); 
-			getSelectionBounds(x,y,w,h); 
-			if (Verbosity >3) {print (x,y,w,h, imagewidth, imageheight,ROI + " ROIs so far");}
-			if ((x==0) &&(y==0) &&(w==imagewidth) && (h==imageheight)) //remove the original now if it is too small to erode by the specified amount
-				{
-				roiManager("select", currentROI); roiManager("Delete"); 
-				if (Verbosity >3) {print(x + "," + y+ "," +w+ "," +h, "deleting ROI #"+ROI); print("there are now " +roiManager("count")+ " ROIs in the list");}
-				}
-			selectWindow("Mask");close();//closes the mask window
-			}
-
+		ForceSquareRoot = L_SegmentationSettings[5];	// square root can even out cell intensities across image 
+		//don't run square root if source image is noisy - here deciding based on input files >1 as it is conserved for whole dataset. Could be based on image but it might chnage from one to next..
+			
+		if (CalciumChannel != -1) 
+			{NumberOfSourceFrames =CondenseFactor*nFramestoSegment;}
+		else 
+			{NumberOfSourceFrames=nFramestoSegment;} // if no calcium channel, Condensefactor may have been ignored and not set
 	
+			
+			//Now ForceSquareRoot is +1 on,  0 default or -1 prevent. Default isoff for single frame and off for StarDist and, for conventional, on unless single frame
+			SquareRootTheImage = ((!L_UseStarDist && NumberOfSourceFrames!=1 && ForceSquareRoot==0)  || (ForceSquareRoot==1));
+			if(SquareRootTheImage) run("Square Root"); //this generates 1E3+ROIs from noisy single image conventionally, cannot be used
+			smooth = L_SegmentationSettings[3];// smooth = "median_radius3"; or 5  // User selected because depends on Compression as well, if this is <5 then we likely need this.
+			saveAs("Tiff", SavePath + "Segmentation"+well+".tif"); //  now save the segmentation image
+			rename("MAXproj_nuclei");
+			
+			
+	
+	
+	
+			if (!L_UseStarDist)
+				{
+				//be sure scale properties are correct so band is going to be 1 pixel not 1 inch wide! Needs PixelSizePostBin
+				//run("Properties...", "channels=1 slices=1 frames="+nSlices+" unit=um pixel_width="+PixelSizePostBin +" pixel_height="+PixelSizePostBin +" voxel_depth=1 frame=[1 min]");	
+				Watershed= L_SegmentationSettings[4];
+				getNuclearROI(L_SegmentationSettings[1], L_SegmentationSettings[2], "MAXproj_nuclei", smooth, L_SegmentationSettings[0], Watershed);
+				}
+			else
+				{
+				getPixelSize(unit, pixelWidth, pixelHeight);
+				// Stardist was defining ROIs over the edge, crashing the make band, even with excludeBoundary 2 or half of the sqrt(max size)+ some. THerefore added to the removal filter
+				MaxBoundaryProximity= 2;//*(1+floor((Math.sqrt(L_SegmentationSettings[2])/2)/pixelWidth));//4 + 1+floor((Math.sqrt(L_SegmentationSettings[2])/2)/pixelWidth);
+				args="['input':'MAXproj_nuclei', 'modelChoice':'Versatile (fluorescent nuclei)', 'normalizeInput':'true', 'percentileBottom':'1.0','percentileTop':'99.8',";
+				args=args+"'probThresh':'0.5', 'nmsThresh':'0.0', 'outputType':'ROI Manager', 'nTiles':'1',	'excludeBoundary':'" + MaxBoundaryProximity + "',";
+				args=args+" 'roiPosition':'Automatic', 'verbose':'false','showCsbdeepProgress':'false', 'showProbAndDist':'false'], process=[false]";
+				run("Command From Macro", "command=[de.csbdresden.stardist.StarDist2D], args="+args);
+				selectWindow("MAXproj_nuclei");
+				// remove ROIs that fail to satisfy criteria 
+				// i) user-defined size constraints (in um^2)
+				// ii) all points far enough from edge that the make band will not crash the script
+				UnFilteredROIs = roiManager("count");
+				print("UnfilteredROIs detected by stardist="+UnFilteredROIs);
+				xminLimit= 0;//+1+floor(band_width/pixelWidth);
+				yminLimit=xminLimit;
+				xmaxLimit=imagewidth-1;//+floor(band_width/pixelWidth);
+				ymaxLimit=imageheight-1;//+floor(band_width/pixelHeight);
+				ROIsOutOfBounds=0; ROIsTooLarge=0;ROIsTooSmall=0;
+			
+				for (ROI=UnFilteredROIs; ROI >0; ROI--)
+					{
+					roiManager("Select", ROI-1); //first is "0", starting at last so no renumbering issues in deletion
+					//checking all settings first to permit the else if series here; could be faster to define functions to call only as needed?
+					getSelectionBounds(xmin, ymin,w,h); xmax=xmin+w; ymax=ymin+h; //about 20% faster than using getStatistics
+					area=getValue("Area"); //this is in calbrated units in image properties)
+					if ((xmin<xminLimit) || (xmax>xmaxLimit)) {ROIsOutOfBounds++; roiManager("Delete");}
+					else if (ymin<yminLimit || ymax>ymaxLimit) {ROIsOutOfBounds++; roiManager("Delete");}
+					else if ((area > L_SegmentationSettings[2])) {ROIsTooLarge ++; roiManager("Delete");}
+					else if ((area < L_SegmentationSettings[1])) {ROIsTooSmall ++; roiManager("Delete");}
+					//else print(ROI, xmin,xmax, ymin, ymax);
+					}
+				if (ROIsOutOfBounds !=0) print("Removed " + ROIsOutOfBounds + " ROIs from stardist that had pixels over the edge of the image");
+				print("Removed " + ROIsTooLarge + " ROIs identified by stardist that were larger than user-specified size limits");
+				print("Removed " + ROIsTooSmall + " ROIs identified by stardist that were smaller than user-specified size limits");	
+				}	
+			FilteredROIs = roiManager("count"); print("Remaining ROIs="+FilteredROIs);
 		
-		//save trimmed ROI set, these are the ones we can work with
-		// this set could be used to collect calcium data also
-		if (roiManager("Count")!=0) {
-				roiManager("Save",SavePath + "ROItrimmed"+well+".zip");
-				roiManager("Select All"); roiManager("Delete");}
+	
+		//save Original ROI set - this is all possible ROIs obtained from the calcium probe localised to the nucleus.
+		// later these ROIs will be shrunk and some ROIs will be discarded, the remaining ROIs will be used to generate cytoplasm bands that correspond to the nuclear zones
+		//so the number of ROIs in the original set is higher than the others
+		// a "trimmed" version is saved that has the surviving ROIs at original size
+	
+			OriginalNumberOfROIs = roiManager("count");  // if this is too many, save the list for the record but make a decision after
+			if (OriginalNumberOfROIs > L_MaxROIs) 
+				{	
+				roiManager("reset"); // choice here either limit to max or quit
+				OriginalNumberOfROIs=0;
+				print("More ROIs than the limit you set, something is probably wrong with the settings. The list was set to zero");
+				}
+			
+			if (Verbosity >1) print(OriginalNumberOfROIs + " ROIs found in well " + well);
+			
+			if (Verbosity >3) print("Starting with " + roiManager("Count") + " ROIs"); 
+			if (OriginalNumberOfROIs==0) {
+					if (isOpen("ROI Manager")) {selectWindow("ROI Manager"); run("Close");}
+					print("There are no ROIs detected for well " + well + " in " + MergedFile  + ". Moving to next well."); 			
+					run("Close All"); 
+					//setBatchMode(false);  handled in calling function
+					return 0;
+						}	
+						
+			if (OriginalNumberOfROIs!=0)
+				{
+				roiManager("Save", SavePath + "ROIoriginal"+well+".zip");
+				if (Verbosity >3) print(SavePath + "ROIoriginal"+well+".zip");
+				}
 				
-		if (isOpen("ROI Manager")) {selectWindow("ROI Manager"); run("Close");} //without delete, ROI manager accumulates all ROIs
-
-		if (File.exists(SavePath + "ROItrimmed"+well+".zip") != 1) 
-			{
-			if (Verbosity >0) print("There are no ROIs detected for " + MergedFile + " after trimming. Moving to next well."); 
-			run("Close All"); return 0;  //leave function as there is nothing more to do
-			}
+			NumberOfROIsRemaining = OriginalNumberOfROIs;
 	
-// now we can work with the trimmed ROI list
-		// NB use no overlap bands only relevant for cyto
-		CreateROIs("Nuclear", SavePath , well, "MAXproj_nuclei", L_ErodeCycles, band_width, UseNoOverlapBands);//create nuclear ROIs using parameters L_experimentpath, well, MAXproj_nuclei, ErodeCycles
-//*/ //DEBUG		
+			// Delete nuclear ROIs too small to survive an erode - loop 
+			//for (ROI=0; ROI<OriginalNumberOfROIs;  ROI++) 
+			if (L_ErodeCycles>0)
+				{
+				for (ROI=OriginalNumberOfROIs; ROI >0; ROI--)
+					{			
+					selectWindow("MAXproj_nuclei");
+					currentROI = ROI-1;//ROI-(OriginalNumberOfROIs-NumberOfROIsRemaining);//if ROIs are deleted the current position should reflect that the remaining ROIs have moved up the list
+					roiManager("select", currentROI);
+					if (Verbosity >3) {print("creating mask from ROI #"+currentROI); print("there are now " +roiManager("count")+ " ROIs in the list"); }
+					//erode has to be on 8 bit image and cannot directy operate on ROI selection
+					run("Create Mask"); for (i=0; i< L_ErodeCycles; i++) run("Erode");
+					run("Create Selection"); 
+					getSelectionBounds(x,y,w,h); 
+					if (Verbosity >3) {print (x,y,w,h, imagewidth, imageheight,ROI + " ROIs so far");}
+					if ((x==0) &&(y==0) &&(w==imagewidth) && (h==imageheight)) //remove the original now if it is too small to erode by the specified amount
+						{
+						roiManager("select", currentROI); roiManager("Delete"); 
+						if (Verbosity >3) {print(x + "," + y+ "," +w+ "," +h, "deleting ROI #"+ROI); print("there are now " +roiManager("count")+ " ROIs in the list");}
+						}
+					selectWindow("Mask");close();//closes the mask window
+					}
+				}
+	
+				
+			//save trimmed ROI set, these are the ones we can work with
+			// this set could be used to collect calcium data also
+			 // delete all ROIs or ROI manager accumulates with future ROIs
+			if (roiManager("Count")!=0) {roiManager("Save",SavePath + "ROItrimmed"+well+".zip"); roiManager("Select All"); roiManager("Delete");}
+			if (isOpen("ROI Manager")) {selectWindow("ROI Manager"); run("Close");} //without delete, ROI manager accumulates all ROIs
+	
+			if (File.exists(SavePath + "ROItrimmed"+well+".zip") != 1) 
+				{
+				if (Verbosity >0) print("There are no ROIs detected for " + MergedFile + " after trimming. Moving to next well."); 
+				run("Close All"); return 0;  //leave function as there is nothing more to do
+				}
 		
-		if (!UseNoOverlapBands)
-					CreateROIs("Cytoplasm", SavePath , well, "MAXproj_nuclei", L_ErodeCycles, band_width,UseNoOverlapBands);//create cytoplasm ROIs using parameters L_experimentpath, well, MAXproj_nuclei, ErodeCycles
-		else
-			{
-			// need to generate a cyto image here - make a copy and modify because the original is quantified later
-			sourceformaxcyto= "C" + L_cytoChannel + "-Merged" + well + ".tif";
+			// now we can work with the trimmed ROI list
+			// NB use no overlap bands only relevant for cyto
+			CreateROIs("Nuclear", SavePath , well, "MAXproj_nuclei", L_ErodeCycles, L_BandWidth, UseNoOverlapBands);//create nuclear ROIs using parameters L_experimentpath, well, MAXproj_nuclei, ErodeCycles
+	
+	
+//debug
+		
+			if (!UseNoOverlapBands) // conventional bands as we used before
+				CreateROIs("Cytoplasm", SavePath , well, "MAXproj_nuclei", L_ErodeCycles, L_BandWidth, UseNoOverlapBands);//create cytoplasm ROIs using parameters L_experimentpath, well, MAXproj_nuclei, ErodeCycles
+			else //adaptive bands
+				{
+				// need to generate a cyto image here - make a copy and modify because the original is quantified later
+				sourceformaxcyto= "C" + L_cytoChannel + "-Merged" + well + ".tif";
+	//DEBUG - the channel is hard coded to #2 at the moment
 				selectWindow(sourceformaxcyto);
-				run("Select All"); //in case caller left random selection, not currently supported
+				run("Select All"); //in case caller left random selection on the image, this is not currently supported
 				run("Duplicate...", "title=forMaxcyto");
 				sourceformaxcyto="forMaxcyto"; // now the existing data image is freed
-			selectWindow(sourceformaxcyto);
-			//run("Subtract Background...", "rolling=50");
-			run("Median...", "radius=2"); //needed or get a lot of little dots?
-			returnMaxProjection(sourceformaxcyto, "cyto"); // returns as MAXproj_cyto
-			saveAs("Tiff", SavePath + "SegmentationCyto"+well+".tif"); //  now save the segmentation image
-			rename("MAXproj_cyto");
-			CreateROIs("Cytoplasm", SavePath , well, "MAXproj_cyto", L_ErodeCycles, band_width,UseNoOverlapBands);//create cytoplasm ROIs using parameters L_experimentpath, well, MAXproj_nuclei, ErodeCycles
-			selectWindow(sourceformaxcyto); close();
-			selectWindow("MAXproj_cyto"); close();
+				selectWindow(sourceformaxcyto);
+				//run("Subtract Background...", "rolling=50");
+				run("Median...", "radius=2"); //needed or get a lot of little dots?
+				returnMaxProjection(sourceformaxcyto, "cyto"); // returns as MAXproj_cyto
+				saveAs("Tiff", SavePath + "SegmentationCyto"+well+".tif"); //  now save the segmentation image
+				rename("MAXproj_cyto");
+				//create AND save cytoplasm ROIs using parameters L_experimentpath, well, MAXproj_nuclei, ErodeCycles
+				CreateROIs("Cytoplasm", SavePath , well, "MAXproj_cyto", L_ErodeCycles, L_BandWidth, UseNoOverlapBands);
+				CreateROIs("Soma", SavePath , well, "MAXproj_cyto", L_ErodeCycles, L_BandWidth, UseNoOverlapBands);
+				selectWindow(sourceformaxcyto); close();
+
 			}		
-		//now should have initial trimmed ROIs, shrunken nuclear ROIs and, band ROIs. Keep all for now as they are probably not optimal
-	}
-	//THE ROIs HAVE BEEN GENERATED AND SAVED. If we want to use old ROIs already saved, then we come back here.
-	
-	
-	
-
-// RENAMING split channels here because may skip next step
-//  treating all channels the same to generate cyt and nuc data in all cases,  regardless of whether they are coompartment restricted or spatial ratio channels
-//should collect intensity data as well - here is only intensity data and ratios are generated later
-	for(currentchannel=0;currentchannel<Channels;currentchannel++ ) 
-		{selectWindow("C"+currentchannel+1+"-Merged" + well + ".tif");rename(L_SignalNamesRGB[currentchannel]+well+".tif");}
-	
-//HERE ONWARDS - data is collected from the ROIs
-
-// first check they still exist after possible removal with the adaptive segmentation
-if (File.exists(SavePath + "ROI"+"nuc"+well+".zip") )
-	{
-	//FIRST - shape parameters
-	selectWindow("MAXproj_nuclei"); //can use this single timepoint to  collect ROI shape data for all ROI types // to get shape data expand the measurements types at this point
-	//run("Set Measurements...", "area mean standard modal min centroid center perimeter fit shape feret's median skewness kurtosis area_fraction redirect=None decimal=3");
-	run("Set Measurements...", "area mean standard modal min centroid center perimeter fit shape feret's median skewness kurtosis redirect=None decimal=3");
-	roiManager("Open", SavePath + "ROI"+"trimmed"+well+".zip");
-	//Keys = newArray("Area", "Mean", "StdDev", "Mode", "Min", "Max", "X", "Y", "XM", "YM", "Perim.", "Major", "Minor", "Angle", "Circ",  "Feret", "FeretAngle", "FeretX", "FeretY", "FeretAngle", "Skew", "Kurt", "AR", "Round", "Solidity");
-		
-		// Results table option - it is faster but screen may flash
-		t1=getTime();
-		roiManager("multi-measure measure_all"); //puts one ROI per row into a results table to simplify access to parameters by ROI
-		firstrun_hideresultstable= true;
-		if (firstrun_hideresultstable) //do this once only because it is a slow function
-			{
-			firstrun_hideresultstable=false;
-			if(isOpen("Results")) {selectWindow("Results"); setLocation(screenWidth, screenHeight);} 
-			}
-		filetosave= SavePath + "Results"+well+"ROI-SpatialFeaturesFromCaMAXproj";	
-		if (Verbosity >3) print("Saving "+filetosave+".xls");	
-		saveAs("Results", filetosave+".xls"); //saving compartment  data output
-		
-		if (Verbosity >3) print("ROI data to results to file took " + getTime()-t1 + "ms");
-	
-	
-	
-		// Specifically for shapes - 35 parameters here 
-		// this is 5x slower than using the results table!
-		//if (File.exists(filetosave + ".csv")) a=File.delete(filetosave + ".csv"); // removal of existing file needed if use only append
-		t1=getTime();
-		NumROIs= roiManager("count");
-		for (ROI=0;ROI<NumROIs; ROI++)
-			{
-			roiManager("select", ROI); 	
-			List.setMeasurements ;   //35 values
-			List.toArrays(keys, values);
-			if (ROI==0)
-				{
-				NumberOfValues = List.size ;
-				header = "ROIs/ShapeParameters:";
-				for (i=0;i<NumberOfValues; i++) {header= header + ","+ keys[i] ;}
-				File.saveString(header+"\n", filetosave + ".csv") ; // set as csv
-				}
-			ValueDataString= toString(ROI+1);
-			for (i=0;i<NumberOfValues; i++) {ValueDataString= ValueDataString + ","+ values[i];}
-			File.append(ValueDataString, filetosave + ".csv") ; // set as csv
-			}	
-		if (Verbosity >3) print("ROI data to file using keys took " + getTime()-t1 + "ms");	
-		
-		
-		
-		//v=getVersion(); vn=parseFloat(substring(v,lengthOf(v)-5, lengthOf(v)-1));
-		//if(vn>1.51) 	Table.rename( "Results"+well+"ROI-SpatialFeaturesFromCaMAXproj"+".xls", "Results"); //v1.52a onwards allows all kinds of table names
-		//If there's only a single time point, still need a calcium frame to substitute for the fast calcium lower down
-		
-		selectWindow("MAXproj_nuclei");	//   segmentation image saved earlier
-		run("Close");		
-		killROImanager();
-		
-		
-	//Now ANALYSE any condensed  CALCIUM DATA, as well as a faster version  LATER
-	
-	// here need parameters Channels, SignalNamesRGBgroups and passed Group
-	
-	
-	
-	
-	//set the measurement parameters for ktrs, area etc for QC is in the shaped data, e.g. to check if  erosion is too extreme. 
-	//Open the nuclear ROIs and append ERK-p38-Ca data as a single file
-	//firstrun_hideresults= true; - already done later
-	
-	run("Set Measurements...", "mean redirect=None decimal=3"); //now we have a separate shape file, no need for areas here
-	//ROItype=newArray("nuc", "band");//NB compartment is nuc and cyt but I need nuc and band!
-	
-	for(currentcompartment=0;currentcompartment<compartment.length;currentcompartment++ )
-		{//EACH COMPARTMENT
-		roiManager("Open", SavePath + "ROI"+compartment[currentcompartment]+well+".zip");
-		//Now treat all channels the same - but this is the condensed Ca and should be saved as such or it will be over-written later
-		for(currentchannel=0;currentchannel<Channels;currentchannel++ )
-			{//EACH CHANNEL
-			CondensedChannelIndicator=""; if ((L_SignalNamesRGB[currentchannel]=="Ca") && (CondenseFactor!=1))  CondensedChannelIndicator="Condensed"; //don't say Condensed if it is not!
-			if (Verbosity >1) print("Quantifying "+ roiManager("count")* nSlices + " ROIs");
-			selectWindow(L_SignalNamesRGB[currentchannel]+well+".tif");
-			filenametosave=	"Results"+well+CondensedChannelIndicator+L_SignalNamesRGB[currentchannel]+compartment[currentcompartment]; //+".xls";	
-			// two options here, Results table flashes on the screen even in Batch Mode, but List/keys is many times slower
-			SaveDataFromSelected2Dtimecourse(DataCollectionOption, Verbosity, SavePath+filenametosave+".xls");
-			//SaveDataFromSelected2Dtimecourse(DataCollectionOption, Verbosity, SavePath+filenametosave+".csv");
-		}	
-		killROImanager();
+			//now should have initial trimmed ROIs, shrunken nuclear ROIs and, band ROIs. Keep all for now as they are probably not optimal
 		}
+		//THE ROIs HAVE BEEN GENERATED AND SAVED. If we want to use old ROIs already saved, then we come back here.
+
+	
+
+	
+	// RENAMING split channels here because may skip next step
+	//  treating all channels the same to generate cyt and nuc data in all cases,  regardless of whether they are coompartment restricted or spatial ratio channels
+	//should collect intensity data as well - here is only intensity data and ratios are generated later
+		for(currentchannel=0;currentchannel<Channels;currentchannel++ ) 
+			{selectWindow("C"+currentchannel+1+"-Merged" + well + ".tif");rename(L_SignalNamesRGB[currentchannel]+well+".tif");}
 	
 	
-	if((CalciumChannel!=-1)&&(CondenseFactor==1))  //get a fastCa substitute from the merged channels if necessary
-		{selectWindow(L_SignalNamesRGB[CalciumChannel-1]+well+".tif"); 	run("Duplicate...", "title=SubstituteForFastCalcium" +" duplicate");}
-	
-	
-	
-	if(CalciumChannel!=-1) 
-		{
-		if(CondenseFactor!=1) //open the FastCa stack, naming with window indicators handled above
-			{ 
-			if (!isOpen("FastCa"+well+".tif"))
-				{
-				if (File.exists(FastCa) != 1) {print("WARNING: did not find FastCa file at " + FastCa); print(""); return 0;} // skip to next well
-				open(FastCa);
-				}
-			selectWindow("FastCa"+well+".tif");
-			}
-			else selectWindow("SubstituteForFastCalcium"); //this was not generated earlier from the calcium frame, when there is only 1 and will do for the next steps
-				
+		//HERE ONWARDS - data is collected from the ROIs
 		
-			rename("Fastcalcium"+well+".tif");
-			currentchannel=CalciumChannel-1;//2;//calcium	
-	
-		run("Set Measurements...", "mean redirect=None decimal=3"); //now we have a separate shape file, no need for areas here
-	
-		//open the "trimmed ROI", this is the nuclear ROI before erosion to get moreaveraged Ca data from NLS Ca-probe; for untargeted us the nuc and band data)
-		//***this gave us a bug before v5d15editing
-		roiManager("Open",SavePath + "ROItrimmed"+well+".zip")
-		selectWindow("Fastcalcium"+well+".tif");	
-		filenametosave=	"Results"+well+L_SignalNamesRGB[L_CalciumChannel-1]+"bignuc";//"Cabignuc";
-	
-		// two options here, Results table flashes on the screen even in Batch Mode, but List/keys is many times slower. We move the Results table off the window
-		SaveDataFromSelected2Dtimecourse(DataCollectionOption, Verbosity, SavePath+filenametosave+".xls");
-		//SaveDataFromSelected2Dtimecourse("List", Verbosity, SavePath+filenametosave+".csv");	
-		killROImanager();
+		// first check they still exist after possible removal with the adaptive segmentation
+		if (File.exists(SavePath + "ROI"+"nuc"+well+".zip") )
+			{
+			//FIRST - shape parameters		
+			//run("Set Measurements...", "area mean standard modal min centroid center perimeter fit shape feret's median skewness kurtosis area_fraction redirect=None decimal=3");
+			run("Set Measurements...", "area mean standard modal min centroid center perimeter fit shape feret's median skewness kurtosis redirect=None decimal=3");
+			//Keys = newArray("Area", "Mean", "StdDev", "Mode", "Min", "Max", "X", "Y", "XM", "YM", "Perim.", "Major", "Minor", "Angle", "Circ",  "Feret", "FeretAngle", "FeretX", "FeretY", "FeretAngle", "Skew", "Kurt", "AR", "Round", "Solidity");
+
+
+			firstrun_hideresultstable= true;
+			// use trimmed any more because numbers don't match when we have band
 			
-		for(currentcompartment=0;currentcompartment<compartment.length;currentcompartment++ ) //data acquisition on fastCa, so do not collect on compressed data above because it will be overwritten
-			{
-			roiManager("Open", SavePath + "ROI"+compartment[currentcompartment]+well+".zip");
-			selectWindow("Fastcalcium"+well+".tif");
-			filenametosave=	"Results"+well+L_SignalNamesRGB[currentchannel]+compartment[currentcompartment];
-			SaveDataFromSelected2Dtimecourse(DataCollectionOption, Verbosity, SavePath+filenametosave+".xls");	
-			killROImanager();
-			}
-			selectWindow("Fastcalcium"+well+".tif");close();
-		}
-	
-	
+			
+			firstrun_hideresultstable1= SaveMorphologicalParameters(firstrun_hideresultstable, "MAXproj_nuclei", 
+				SavePath + "ROI"+"trimmed"+well,  SavePath + "Results"+well+"ROI-SpatialFeaturesFromCaMAXproj");
+			// next two only possible if adaptive segmentation
+			firstrun_hideresultstable2= SaveMorphologicalParameters(firstrun_hideresultstable1,"MAXproj_cyto",SavePath + "ROI"+"band"+well, SavePath + "Results"+well+"ROI-SpatialFeaturesFromBand");
+			firstrun_hideresultstable= SaveMorphologicalParameters(firstrun_hideresultstable2, "MAXproj_cyto",SavePath + "ROI"+"soma"+well, SavePath + "Results"+well+"ROI-SpatialFeaturesFromSoma");
 
+			function SaveMorphologicalParameters(L_firstrun_hideresultstable, sourceimage, ROIpath, MorphParamFilename)	
+				{	
+					if (!File.exists(ROIpath+".zip") || !isOpen(sourceimage)) return (L_firstrun_hideresultstable); //might not have soma so just continue	
+					selectWindow(sourceimage); //can use this single timepoint to  collect ROI shape data for all ROI types // to get shape data expand the measurements types at this point
+					roiManager("Open", ROIpath+".zip");	
+					// Results table option - it is faster but screen may flash
+					t1=getTime();
+					roiManager("multi-measure measure_all"); //puts one ROI per row into a results table to simplify access to parameters by ROI				
+					if (L_firstrun_hideresultstable) //do this once only because it is a slow function
+						{
+						L_firstrun_hideresultstable=false;
+						if(isOpen("Results")) {selectWindow("Results"); setLocation(screenWidth, screenHeight);} 
+						}
+					
+					if (Verbosity >3) print("Saving "+MorphParamFilename+".xls");	
+					saveAs("Results", MorphParamFilename+".xls"); //saving compartment  data output
+					
+					if (Verbosity >3) print("ROI data to results to file took " + getTime()-t1 + "ms");
+				return (L_firstrun_hideresultstable);
+				}
+		
+			// don't need both! slower one commented out
+				// Specifically for shapes - 35 parameters here 
+				// this is 5x slower than using the results table!
+				//if (File.exists(filetosave + ".csv")) a=File.delete(filetosave + ".csv"); // removal of existing file needed if use only append
+			/*	
+			 * t1=getTime();
+				NumROIs= roiManager("count");
+				for (ROI=0;ROI<NumROIs; ROI++)
+					{
+					roiManager("select", ROI); 	
+					List.setMeasurements ;   //35 values
+					List.toArrays(keys, values);
+					if (ROI==0)
+						{
+						NumberOfValues = List.size ;
+						header = "ROIs/ShapeParameters:";
+						for (i=0;i<NumberOfValues; i++) {header= header + ","+ keys[i] ;}
+						File.saveString(header+"\n", filetosave + ".csv") ; // set as csv
+						}
+					ValueDataString= toString(ROI+1);
+					for (i=0;i<NumberOfValues; i++) {ValueDataString= ValueDataString + ","+ values[i];}
+					File.append(ValueDataString, filetosave + ".csv") ; // set as csv
+					}	
+				if (Verbosity >3) print("ROI data to file using keys took " + getTime()-t1 + "ms");	
+								
+			 */
+				
+				//v=getVersion(); vn=parseFloat(substring(v,lengthOf(v)-5, lengthOf(v)-1));
+				//if(vn>1.51) 	Table.rename( "Results"+well+"ROI-SpatialFeaturesFromCaMAXproj"+".xls", "Results"); //v1.52a onwards allows all kinds of table names
+				//If there's only a single time point, still need a calcium frame to substitute for the fast calcium lower down
+				
+						
+				killROImanager();
+				
+				
+			//Now ANALYSE any condensed  CALCIUM DATA, as well as a faster version  LATER
+			
+			// here need parameters Channels, SignalNamesRGBgroups and passed Group
+			
 	
-	selectWindow("Results"); run("Close"); 
+			//set the measurement parameters for ktrs, area etc for QC is in the shaped data, e.g. to check if  erosion is too extreme. 
+			//Open the nuclear ROIs and append ERK-p38-Ca data as a single file
+			//firstrun_hideresults= true; - already done later
+
+			
+			run("Set Measurements...", "mean redirect=None decimal=3"); //now we have a separate shape file, no need for areas here
+			//ROItype=newArray("nuc", "band");//NB compartment is nuc and cyt but I need nuc and band!
+			
+			for(currentcompartment=0;currentcompartment<compartment.length;currentcompartment++ )
+				{//EACH COMPARTMENT, check soma exists
+				ROIfile = 	SavePath + "ROI"+compartment[currentcompartment]+well+".zip";
+				
+				if (File.exists(ROIfile))	
+					{
+					roiManager("Open", ROIfile);
+					//Now treat all channels the same - but this is the condensed Ca and should be saved as such or it will be over-written later
+					for(currentchannel=0;currentchannel<Channels;currentchannel++ )
+						{//EACH CHANNEL
+						CondensedChannelIndicator=""; if ((L_SignalNamesRGB[currentchannel]=="Ca") && (CondenseFactor!=1))  CondensedChannelIndicator="Condensed"; //don't say Condensed if it is not!
+						if (Verbosity >1) print("Quantifying "+ roiManager("count")* nSlices + " ROIs");
+						selectWindow(L_SignalNamesRGB[currentchannel]+well+".tif");
+						filenametosave=	"Results"+well+CondensedChannelIndicator+L_SignalNamesRGB[currentchannel]+compartment[currentcompartment]; //+".xls";	
+						// two options here, Results table flashes on the screen even in Batch Mode, but List/keys is many times slower
+						SaveDataFromSelected2Dtimecourse(DataCollectionOption, Verbosity, SavePath+filenametosave+".xls");
+						//SaveDataFromSelected2Dtimecourse(DataCollectionOption, Verbosity, SavePath+filenametosave+".csv");
+						}
+					}	
+				killROImanager();
+				}
+			
+
+print("EDITING");				
+			if((CalciumChannel!=-1)&&(CondenseFactor==1))  //get a fastCa substitute from the merged channels if necessary
+				{selectWindow(L_SignalNamesRGB[CalciumChannel-1]+well+".tif"); 	run("Duplicate...", "title=SubstituteForFastCalcium" +" duplicate");}
+			
+			
+			
+			if(CalciumChannel!=-1) 
+				{
+				if(CondenseFactor!=1) //open the FastCa stack, naming with window indicators handled above
+					{ 
+					if (!isOpen("FastCa"+well+".tif"))
+						{
+						if (File.exists(FastCa) != 1) {print("WARNING: did not find FastCa file at " + FastCa); print(""); return 0;} // skip to next well
+						open(FastCa);
+						}
+					selectWindow("FastCa"+well+".tif");
+					}
+					else selectWindow("SubstituteForFastCalcium"); //this was not generated earlier from the calcium frame, when there is only 1 and will do for the next steps
+						
+				
+					rename("Fastcalcium"+well+".tif");
+					currentchannel=CalciumChannel-1;//2;//calcium	
+			
+				run("Set Measurements...", "mean redirect=None decimal=3"); //now we have a separate shape file, no need for areas here
+			
+				//open the "trimmed ROI", this is the nuclear ROI before erosion to get moreaveraged Ca data from NLS Ca-probe; for untargeted us the nuc and band data)
+				//***this gave us a bug before v5d15editing
+				roiManager("Open",SavePath + "ROItrimmed"+well+".zip")
+				selectWindow("Fastcalcium"+well+".tif");	
+				filenametosave=	"Results"+well+L_SignalNamesRGB[L_CalciumChannel-1]+"bignuc";//"Cabignuc";
+			
+				// two options here, Results table flashes on the screen even in Batch Mode, but List/keys is many times slower. We move the Results table off the window
+				SaveDataFromSelected2Dtimecourse(DataCollectionOption, Verbosity, SavePath+filenametosave+".xls");
+				//SaveDataFromSelected2Dtimecourse("List", Verbosity, SavePath+filenametosave+".csv");	
+				killROImanager();
+					
+				for(currentcompartment=0;currentcompartment<compartment.length;currentcompartment++ ) //data acquisition on fastCa, so do not collect on compressed data above because it will be overwritten
+					{
+					ROIfile = 	SavePath + "ROI"+compartment[currentcompartment]+well+".zip";
+					if (File.exists(ROIfile))	
+						{
+						roiManager("Open", ROIfile);	
+						selectWindow("Fastcalcium"+well+".tif");
+						filenametosave=	"Results"+well+L_SignalNamesRGB[currentchannel]+compartment[currentcompartment];
+						SaveDataFromSelected2Dtimecourse(DataCollectionOption, Verbosity, SavePath+filenametosave+".xls");	
+						killROImanager();
+						}
+					}
+					selectWindow("Fastcalcium"+well+".tif");close();
+			}
+		
+		selectWindow("Results"); run("Close"); 
+		}
+		
+				
+			
+				
+		//close all merged channels outside the  conditional loop
+		for(currentchannel=0;currentchannel<Channels;currentchannel++) //{selectWindow(L_SignalNamesRGB[currentchannel]+well+".tif"); close();} // when using F4DR, may need to close 3 times
+			{Target= L_SignalNamesRGB[currentchannel]+well+".tif";fullyClose(Target); }// on some versions e.g. 1.53s get NAN if try to assemble string in the function call, even if use toString(L_SignalNamesRGB[currentchannel])+well+".tif");} // toString is needed as  L_SignalNamesRGB[currentchannel] was coming back as NaN. still had trouble with v1 of function, though  verbose version below worked OK
+		
+		print(printformatter +"ROI expand and band completed for Well" + CurrentWell + " in "+ MergedFile);
+			if (Verbosity >2) print("");
+			
+	//I moved this from the above loop as it was getting left behind
+	selectWindow("MAXproj_nuclei");	run("Close"); //   segmentation image saved earlier
+	isOpen("MAXproj_cyto") {selectWindow("MAXproj_cyto"); close();}
 	}
-	
-	//close all merged channels outside the  conditional loop
-	for(currentchannel=0;currentchannel<Channels;currentchannel++) //{selectWindow(L_SignalNamesRGB[currentchannel]+well+".tif"); close();} // when using F4DR, may need to close 3 times
-		{Target= L_SignalNamesRGB[currentchannel]+well+".tif";fullyClose(Target); }// on some versions e.g. 1.53s get NAN if try to assemble string in the function call, even if use toString(L_SignalNamesRGB[currentchannel])+well+".tif");} // toString is needed as  L_SignalNamesRGB[currentchannel] was coming back as NaN. still had trouble with v1 of function, though  verbose version below worked OK
-	
-	print(printformatter +"ROI expand and band completed for Well" + CurrentWell + " in "+ MergedFile);
-		if (Verbosity >2) print("");
-	
-}
 
 
 function SaveDataFromSelected2Dtimecourse(Method, L_verbosity,  savenameandpath)
@@ -2865,399 +2899,336 @@ selectWindow("temp");close();
 
 
 //******** FUNCTION CreateROIs(Compartment...
-function CreateROIs(L_Compartment, Path, CurrentWell, image, NumberofErodeCycles,L_band_width, L_NoOverlapBands)//band_width is in calibrated units (um) 
-{
-run("Options...", "iterations=1 count=1"); // this prevents band selections from ending up as the entire field outside the band
-//setBatchMode("exit and display");
-
-roiManager("Open", Path + "\\ROItrimmed"+CurrentWell+".zip");
-NumberOfROIs = roiManager("count"); 
-if (Verbosity >2) print("Trimmed list contains "+roiManager("count")+ " ROIs. Will find and exclude non-erodable ROIs.");
-
-
-if ((L_Compartment == "Nuclear") || !L_NoOverlapBands) // i.e. if overlap allowed band also this way, otherwise only for nuc
+function CreateROIs(L_Compartment, Path, CurrentWell, image_original, NumberofErodeCycles,LL_band_width, L_NoOverlapBands)//band_width is in calibrated units (um) 
 	{
-if (L_Compartment == "Nuclear") print("eroding nuc");
-	for (ROI=0; ROI <NumberOfROIs; ROI++)
-		{				
-		selectWindow(image);
-		roiManager("select", ROI);//0);//take first to generate replacement at end //  no, roiManager("Update") is simpler
-		if (L_Compartment == "Nuclear") 
-			{
-			run("Create Mask"); 
-			for (i=0; i< NumberofErodeCycles; i++)  run("Erode");
-			}
-		else if (L_Compartment == "Cytoplasm")
-			{
-			run("Make Band...", "band="+L_band_width); run("Create Mask");}  //consider {run("Make Band...", "band="+L_BandWidth);run("Create Mask");run("Erode");} //single erode but from both directions 
-		else FatalError("illegal compartment parameter. Only Nuclear and Cytoplasm allowed, but we have '"+L_Compartment+"'");
-		run("Create Selection"); 
-		 roiManager("Update");
-		/*roiManager("Add");  roiManager("select", 0); roiManager("Delete");*///  roiManager("Update") is simpler
-		selectWindow("Mask");close();
-		}
-	}
-else // here we have selected cytoplasm ROIS and L_NoOverlapBands - experimental algorithm to avoid overlap between larger band ROIs
-	{	
-	//Bands_without_overlap(image, L_band_width, NumberofErodeCycles); //
-	// image and bandwidth passed, paths can be constructed here. Threshold I am just making up for now
-	erosion_cycles=0;// set cyto erode cycles to zero here because we are using ROItrimmed as seeds and they haven't been eroded yet
-	// need thresholds here, and paths
-	nucROIpath=Path + "\\ROInuc"+well+".zip";;// the trimmed list is open, we need to open the eroded one later //Path + "\\ROItrimmed"+CurrentWell+".zip"; // note this one was opened at the beginning of the function
-	ROI_outpath_nuc=Path + "\\ROInuc"+well+".zip";
-	ROI_outpath_cyto=Path + "\\ROIband"+well+".zip";
-	ROI_outpath_band=Path + "\\ROIbandFull"+well+".zip";
-	minCytThreshold=20; 	maxCytThreshold= 3500; //EDIT - THIS SHOULD BE USER INPUT!
-	// image should be smoothed and b-subbed
-	GenerateCytoBandsFromNucSeeds(image, L_band_width,  erosion_cycles, minCytThreshold, maxCytThreshold, nucROIpath, ROI_outpath_band, ROI_outpath_cyto, ROI_outpath_nuc);
-	}
+	if (Verbosity >2) print("CreatingROI type " + L_Compartment);		
+//DEBUG adding a new compartment option here "Soma"
+
+	run("Options...", "iterations=1 count=1"); // this prevents band selections from ending up as the entire field outside the band
+	//setBatchMode("exit and display");
 	
-if (Verbosity >3) print(roiManager("count") + " ROIs");
-
-if (roiManager("Count")!=0 && !(L_Compartment == "Cytoplasm" && L_NoOverlapBands))  // if we are defining cytoplasm with overlap, this is all done already
- 	{
-	if (L_Compartment == "Nuclear") 
- 		{ roiManager("Save",Path + "\\ROInuc"+well+".zip"); }
-	else if (L_Compartment == "Cytoplasm" && !L_NoOverlapBands)
-		{	roiManager("Save",Path + "\\ROIband"+well+".zip");	}
-	else FatalError("illegal compartment parameter. Only Nuclear and Cytoplasm allowed, but we have '"+L_Compartmen+"'");
+	
+	if ((L_Compartment == "Nuclear") || !L_NoOverlapBands) // i.e. if overlap allowed, band also generated this way, otherwise it is only for nuc
+		{
+		roiManager("Open", Path + "\\ROItrimmed"+CurrentWell+".zip");
+		NumberOfROIs = roiManager("count"); 
+		if (Verbosity >2) print("Trimmed list contains "+roiManager("count")+ " ROIs. Will find and exclude non-erodable ROIs.");
+	
+		if (L_Compartment == "Nuclear") print(printformatter + "eroding nuc");
+		for (ROI=0; ROI <NumberOfROIs; ROI++)
+			{				
+			selectWindow(image_original);//"CytoImage");
+			roiManager("select", ROI);//0);//take first to generate replacement at end //  no, roiManager("Update") is simpler
+			if (L_Compartment == "Nuclear") 
+				{
+				run("Create Mask"); 
+				for (i=0; i< NumberofErodeCycles; i++)  run("Erode");
+				}
+			else if (L_Compartment == "Cytoplasm")
+				{run("Make Band...", "band="+LL_band_width); run("Create Mask");}  //consider {run("Make Band...", "band="+L_BandWidth);run("Create Mask");run("Erode");} //single erode but from both directions 
+			else FatalError("illegal compartment parameter. Only Nuclear and Cytoplasm allowed, but we have '"+L_Compartment+"'");
+					
+			run("Create Selection"); 
+			roiManager("Update");	/*roiManager("Add");  roiManager("select", 0); roiManager("Delete");*///  roiManager("Update") is simpler
+			selectWindow("Mask");close();
+			} //end ROI loop
+		}
+	else // here we have selected (cytoplasm OR soma) AND L_NoOverlapBands - experimental algorithm to avoid overlap between larger band ROIs
+		{
+		selectWindow(image_original); run("Duplicate...", "title=CytoImage"); //don't make holes in the original!	
+		//Bands_without_overlap(image, L_band_width, NumberofErodeCycles); //
+		// image and bandwidth passed, paths can be constructed here. Threshold I am just making up for now
+		erosion_cycles=0;// set cyto erode cycles to zero here because we are using ROItrimmed as seeds and they haven't been eroded yet
+		// need thresholds here, and paths
+		unerodednucROIpath =Path + "\\ROItrimmed"+CurrentWell+".zip";
+		erodednucROIpath =Path + "\\ROInuc"+CurrentWell+".zip";// the trimmed list is open, we need to open the eroded one later //Path + "\\ROItrimmed"+CurrentWell+".zip"; // note this one was opened at the beginning of the function
+		ROI_outpath_nuc=Path + "\\ROInuc"+CurrentWell+".zip"; // this is the same as the input path - check this makes sense
+		// not all the next 3 needed, but to reuse the function for bands and soma we can do it this way
+		ROIoutpath_Cyto=Path + "\\ROIband"+CurrentWell+".zip";
+		ROIoutpath_Band=Path + "\\ROIbandFull"+CurrentWell+".zip";
+		ROIoutpath_Soma=Path + "\\ROIsoma"+CurrentWell+".zip"; 
+		ROIoutpath_Somazone=Path + "\\ROIsomaFull"+CurrentWell+".zip"; 
+	//ROIfiles is an array, the first is the seed, the second is unshaped output, third is shaped output , the next are those that need updating
+		
+		
+		
+//DEBUG - the minCytThreshold, maxCytThreshold are hard coded at the moment
+		minCytThreshold=20; 	maxCytThreshold= 3500; //EDIT - THIS SHOULD BE USER INPUT!
+		// image should be smoothed and b-subbed
+		if (L_Compartment=="Cytoplasm")
+			ROIfiles= newArray(unerodednucROIpath, ROIoutpath_Band, ROIoutpath_Cyto, erodednucROIpath, unerodednucROIpath);	
+// at this point we should have the nuc open not the trimmed. What is open?	
+		else if (L_Compartment=="Soma") 
+			ROIfiles= newArray(erodednucROIpath, ROIoutpath_Somazone, ROIoutpath_Soma, erodednucROIpath, unerodednucROIpath, ROIoutpath_Cyto);				
+			
+		GenerateCytoBandsOrSomaFromNucSeeds(L_Compartment, "CytoImage", LL_band_width,  erosion_cycles, minCytThreshold, maxCytThreshold, ROIfiles);//nucROIpath, ROI_outpath_somamax ,ROI_outpath_soma, ROI_outpath_nuc);
+		selectWindow("CytoImage"); close();
+		}
+		
+	if (Verbosity >3) print(roiManager("count") + " ROIs");
+	
+	if (roiManager("Count")!=0 && !(L_Compartment != "Nuclear" && L_NoOverlapBands))  // if we are defining cytoplasm with overlap, this is all done already
+	 	{
+		if (L_Compartment == "Nuclear") 
+	 		 roiManager("Save",Path + "\\ROInuc"+well+".zip"); 
+		else if (L_Compartment == "Cytoplasm" && !L_NoOverlapBands)
+			roiManager("Save",Path + "\\ROIband"+well+".zip");	
+		
+		else FatalError("illegal compartment parameter. Only Nuclear and Cytoplasm allowed, but we have '"+L_Compartment+"'");
+		
+		
+		}
+	killROImanager();
+	
+	
+	
 	}
-killROImanager();
-
-}
 
 //
-
-function GenerateCytoBandsFromNucSeeds(image_for_cyto_threshold, maximum_distance_from_nuc_edge,  cyto_erosion_cycles, minimumCytoThreshold, maximumCytoThreshold, nucROIpath, L_ROI_outpath_band, L_ROI_outpath_cyto, L_ROI_outpath_nuc)
-	{
-//setBatchMode("exit and display");		
-	// this function generates the initial bands based on roiManager content
-	//trimmed nuc list already opened
-	Bands_without_overlap(image_for_cyto_threshold, maximum_distance_from_nuc_edge,  cyto_erosion_cycles);
-	
+// this function generates the bands based on roiManager content
+function GenerateCytoBandsOrSomaFromNucSeeds(LL_Compartment, image_for_cyto_threshold, maximum_distance_from_nuc_edge, cyto_erosion_cycles, 
+minimumCytoThreshold, maximumCytoThreshold, L_ROIfiles)//nucROIpath, L_ROI_outpath_maxextent, L_ROI_outpath_cytosoma, L_ROI_outpath_nuc)
+	{//setBatchMode("exit and display");		
+	roiManager("Open", L_ROIfiles[0]);
+	if (Verbosity >2) print(roiManager("count") + " ROIs initially in " + L_ROIfiles[0]);
+	// this function generates the max extent of the cyto or soma ROIs´
+	BandsOrSoma_without_overlap(LL_Compartment, image_for_cyto_threshold, maximum_distance_from_nuc_edge,  cyto_erosion_cycles);
 	// next function shapes ROIs to a given thresholded image - // seems to work 2023-11-07
 	selectWindow(image_for_cyto_threshold);
 	blackOutside(); // blacks out everything not already in the ROIs from the above band function
-	roiManager("Save", L_ROI_outpath_band);// this should contain large bands without overlap that need shrinking
-	// here the cyto-bands are thresholded based on intensities in the image currently selected
-	ROIsToDelete=ThresholdROIs(minimumCytoThreshold, maximumCytoThreshold); // this returns an array of which nuc ROIs should be removed for pairing with cyto ROIs
-	
-	if (roiManager("count") >0)
+	//if (LL_Compartment=="Cytoplasm")
+	initialROIcount=roiManager("count");
+	roiManager("Save", L_ROIfiles[1]);// this should contain large bands without overlap that need shrinking
+	if (Verbosity >2) print("counts are now "+ initialROIcount+ "; Saving " + L_ROIfiles[1]);
+
+	ROIsToDelete=ThresholdROIs(minimumCytoThreshold, maximumCytoThreshold, image_for_cyto_threshold); // this returns an array of which nuc ROIs should be removed for pairing with cyto ROIs
+	if (Verbosity >2) print("number of ROIs to delete " + ROIsToDelete.length);
+
+	if (LL_Compartment=="Cytoplasm" || LL_Compartment=="Soma")
 		{
-		//save the resulting cyto ROIs; note if any were below threshold they will not exist in this list but need to be taken out of the nuc list
-		roiManager("Save", L_ROI_outpath_cyto);// these are resahped according to the image data
-		//print("cyto is "+L_ROI_outpath_cyto);
-		roiManager("deselect");roiManager("delete"); // isOpen("ROI Manager") fails here
-		//print(roiManager("count") + " ROIs remaining"); 
-		// get the original nuc ROI file and remove the extras. Make space for it and save the new nucROI fil
-		roiManager("Open", nucROIpath); // this should be the eroded list that we need to further exclude samples from
-//print(nucROIpath);
-		//print(roiManager("count") + " ROIs remaining"); 
-		// avoid combining ROI lists
-		if (File.exists(L_ROI_outpath_nuc)) File.delete(L_ROI_outpath_nuc);//); // avoid combining ROI lists
-		if (ROIsToDelete.length >0) //if there is something to delete
-			{
-//print(roiManager("count"));Array.print(ROIsToDelete);print(ROIsToDelete.length);
-			roiManager("select", ROIsToDelete); roiManager("delete");
-//print(roiManager("count") + " ROIs remaining"); print("New ROI file at "+ "C:/temp/"+"new.zip");
-			roiManager("Save", L_ROI_outpath_nuc);//"+"newnuc.zip");
-			}
-		else {roiManager("Save", L_ROI_outpath_nuc); }// +"newnuc.zip"); //just copy it here -  in another implementation there is nothing to do in this case
-		}
-	else 
-		{ // 
-		if (File.exists(L_ROI_outpath_nuc)) File.delete(L_ROI_outpath_nuc);//); // avoid combining ROI lists	
-		}
-//print("nuc is " + L_ROI_outpath_nuc);	print("");
-	return;
-
-
-function Bands_without_overlap(template_image, max_distance, erosion_count)
-	// this takes a ROImanager list of seeds (nuclei) and expands them all in a non-overlapping way
-	//N.B. if initial seeds overlap, there will be trouble! Seems to be OK if they are just touching
-	//ROImanager ends up with the band ROIs
-	{
-	initial_colour = getValue("color.foreground");// temporarily save foreground to ensure fill generates an objective
-	setForegroundColor(255, 255, 255);
-
-	//create new image of correct size to work with masks
-	 	selectWindow(template_image);
-	 	getDimensions(width, height, channels, slices, frames);
-	 	newImage("Seeds", "16-bit black", width, height, 1);
-
-	//show all ROIs and burn them into the seeds image
-		roiManager("Fill");//show all ROIs listed as white
-	// code surrounding pixels according to distance from ROIs
-		setOption("BlackBackground", true);
-		run("Make Binary");
-	//run voronoi on a copy	
-		run("Select All"); run("Duplicate...", "title=Voronoi");
-		run("Voronoi");	run("Invert");
-		setThreshold(254, 255, "raw");
-		run("Convert to Mask");//thresholded area to white, expanded seeds in black
-			run("Gaussian Blur...", "sigma=3");
-			setThreshold(254, 255, "raw");
-			run("Convert to Mask");//thresholded area to white, expanded seeds in black
-			run("Voronoi");run("Invert");
-		setThreshold(254, 255, "raw");
-		run("Convert to Mask");//thresholded area to white, expanded seeds in black
-
-
-		setAutoThreshold("Huang dark no-reset");run("Convert to Mask");
-
-	//generate the watershed
-		selectWindow("Seeds");
-		run("Invert"); //black on white background
-		run("Distance Map");//creates gradient of grey levels according to distance
-	// expand seeds by setting up threshold on this gradient to define the distance limits
-		// this defines how far out the delimiter should go. In attovision it is masked against a second channel - we could consider this
-		setAutoThreshold("Default dark");
-	//debug max_distance= 30;
-		setThreshold(max_distance, 255);  //sets areas further from seeds as thresholded (red)
-		run("Convert to Mask");//thresholded area to white, expanded seeds in black
-		run("Invert");// now expanded seeds in white
-	// draw a line between the expanded seeds
-		//run("Watershed"); // this is not useful
-	imageCalculator("AND create", "Seeds","Voronoi");
-	rename("delimiter_masks");
-	
-	// This is to draw a line around the image to avoid the edge but it is not needed
-	/*getDimensions(width, height, channels, slices, frames);
-	print(width, height, channels, slices, frames);
-	makeRectangle(0, 0, width-1, 1);run("Cut");	
-	makeRectangle(0, 0, 1, height-1);run("Cut");	
-	makeRectangle(0, height-1, width, 1);run("Cut");	
-	makeRectangle(width-1, 0,1, height);run("Cut");	
-	*/
-	
-	selectWindow("Seeds");close();
-	selectWindow("Voronoi");close();
-	//loop through nucleus ROIs
-	Initial_seed_count=roiManager("count"); //the count will increase ...
-	for(ROI=0; ROI<Initial_seed_count; ROI++)
-		{
-		selectWindow("delimiter_masks");
-		roiManager("Select", ROI);
-		//roiManager("Select", 1);
-//if (ROI>2) stop;
-		Roi.getBounds(x, y, width, height);		
-//print(x,y,width, height);
-		doWand(x+width/2,y+height/2);
-		run("Create Mask"); rename("delimiter"); //new image showing max non-overlapping bounds of current ROI
-		roiManager("Select", ROI);
-	 	run("Make Band...", "band="+max_distance-1);// band_width-1);
-		run("Create Mask"); rename("bandmask"); 
-		imageCalculator("AND create",  "bandmask","delimiter"); 
-		rename("band");
-
-		for(erode=0; erode< erosion_count; erode++) run("Erode"); //erode the shape to separate from the nucleus
-		//  note this also erodes from outside so if we really need the max distance, add the erode value to it
-		
-		run("Create Selection"); // all discontinuous fragments if any are incuded within ROI
-		roiManager("Update");//roiManager("Add");
-		selectWindow("band"); close();
-    	selectWindow("delimiter"); close();
-		 selectWindow("bandmask"); close();
-		}
-	selectWindow("delimiter_masks"); close();
-	
-	//remove the nulcei now that we have the bands 
-	seeds=Array.getSequence(Initial_seed_count);
-	print("initial count " + Initial_seed_count);
-//Array.print(seeds);
-	roiManager("Select", seeds);
-//	roiManager("Delete");
-	setForegroundColor(initial_colour);
-	}
-
-
-
-// function to constrain ROIs to areas of intensity matching a threshold			
-// assumes ROI list and copy of image for thresholding	(should be bsubbed and smoothed a bit)
-
-
-function blackOutsideOneROI()
-	{
-	run("Make Inverse");
-	// add this as a new ROI
-	roiManager("Add");
-	//print(roiManager("count"));
-	// black out the image area outside the ROIs
-	temp = getValue("rgb.foreground");
-//print(getValue("rgb.foreground"));
-	setForegroundColor(0,0,0);
-	roiManager("select", roiManager("count")-1);
-	roiManager("Fill");//sho
-	setForegroundColor(temp);
-	// remove this outside-ROI ROI
-	roiManager("select", roiManager("count")-1); 
-	roiManager("delete");
-	}
-
-function blackOutsideAllROI()
-{
-	// function to black out all area
-	// join all ROIs together
-	roiManager("deselect");	
-	roiManager("Combine"); // this command causes problems where there are overlaps..
-	//roiManager("Add"); not needed
-	blackOutsideOneROI();
-}
-
-
-// 1. black out area outside ROIs on the image - not needed?
-function blackOutside()
-	{
-	// function to black out all area
-	// join all ROIs together
-	roiManager("deselect");	
-	roiManager("Combine"); // this command causes problems where there are overlaps..
-	//roiManager("Add"); not needed
-	//select all area outside ROIs
-	run("Make Inverse");
-	// add this as a new ROI
-	roiManager("Add");
-	//print(roiManager("count"));
-	// black out the image area outside the ROIs
-	temp = getValue("rgb.foreground");
-//print(getValue("rgb.foreground"));
-	setForegroundColor(0,0,0);
-	roiManager("select", roiManager("count")-1);
-	roiManager("Fill");//sho
-	setForegroundColor(temp);
-	// remove this outside-ROI ROI
-	roiManager("select", roiManager("count")-1); 
-	roiManager("delete");
-	}
-
-
-
-function ThresholdROIs(minThreshold, maxThreshold)
-	{
-	//2. Modify each ROI to match the above threshold pixels
-	
-	// if they don't meet the threshold, make a note to delete the corresponding nuc ROI as well
-	ROIcount= roiManager("count");
-	nucROIsToRemove=newArray(ROIcount); //array initialises with zeros
-	Array.fill(nucROIsToRemove, -1);// use -1 as nothing to remove because 0 points to the first ROI
-		
-	// select ROI
-	for (ROInumber= ROIcount-1; ROInumber>-1; ROInumber--) //start from the end so a deletion does not change the numbering
-		{
-		//minThreshold = 550;	maxThreshold =3550;	ROInumber=17;
-//minThreshold = 50; //nearer 5?
-//maxThreshold =3550;
-//ROInumber= 4; 
-			roiManager("select", ROInumber);
-			getSelectionBounds(x, y, w, h);
-//print(ROIcount, ROInumber,x,y,w,h,minThreshold, maxThreshold);
-			run("Duplicate...", "title=temp");
-			blackOutsideOneROI(); // remove nearby material outside, this deselects the ROI
-			roiManager("select", ROInumber);
-			setThreshold(0, minThreshold); //the range to discard - might be best to use a smoothed image here? consider bckgd
-//setThreshold(0, 20);
-			run("Create Selection"); // requires 8bit
-//print(selectionType(),  getValue("Mean"));
-			if ((selectionType() != -1) && getValue("Mean")!=0) //check it even exists and later again after thresholding      
-				{
-				run("Set...", "value=0");			
-				//run("Restore Selection"); no
-				setThreshold(minThreshold+1, maxThreshold); //the
-//setThreshold(020, 3550);
-				run("Make Inverse");
-				if (selectionType() != -1) 
-					{
-					getSelectionBounds(x1, y1, w1, h1);
-//print(x1,y1,w1,h1); x=1670;y=722;
-				setSelectionLocation(x+x1, y+y1); //if selection loses pixels the position will have shifted
-				roiManager("update"); 	// not roiManager("add");
-					}
-				else 
-					{
-					roiManager("delete");
-					nucROIsToRemove[ROInumber]=ROInumber;
-//print("deleted ROI#"+ROInumber);// this must be saved as an array or the nuc will not have bands
-					}
-				resetThreshold;	
-				//close("temp");
-				}
-			else  
-				{
-				roiManager("delete");	
-				nucROIsToRemove[ROInumber]=ROInumber;
-//print("deleted ROI#"+ROInumber); //  this must be saved as an array or the nuc will not have bands
-				}
-		close("temp"); // regardless , have to close it
-		//print("Checked ROI#"+ROInumber+"; "+roiManager("count")+" ROIs remaining", x,y,w,h,minThreshold, maxThreshold);		
-		}
-	nucROIsToRemove=Array.deleteValue(nucROIsToRemove, -1);	// remove the -1 from the list as they were just fillers
-	return 	nucROIsToRemove;
-	}	
-
-
-
-} //end of function  GenerateCytoBandsFromNucSeeds  with 3 internal functions
-
-
-function Bands_without_overlap_old(template_image, band_width, erosion_count)
-	// this takes a ROImanager list of seeds (nuclei) and expands them all in a non-overlapping way
-	//N.B. if initial seeds overlap, there will be trouble! Seems to be OK if they are just touching
-	//ROImanager ends up with the band ROIs
-	{
-	
-	 initial_colour = getValue("color.foreground");
-	 setForegroundColor(255, 255, 255);//ensure fill generates an objective
-	 selectWindow(template_image);//create new image of correct size to work with masks
-	 getDimensions(width, height, channels, slices, frames);
-	 newImage("Seeds", "16-bit black", width, height, 1);
-	//show all ROIs and burn them into the seeds image
-	run("Select All");
-	roiManager("Fill");//show all ROIs listed as white
-	setOption("BlackBackground", true);
-	run("Make Binary");
-	run("Invert"); //black on white background
-	run("Distance Map");//creates graident of grey levels according to distance
-	setAutoThreshold("Default dark");
-	// this defines how far out the delimiter should go. In attovision it is masked against a second channel - we could consider this
-	setThreshold(band_width+1, 255);  //sets areas further from seeds as thresholded (red), added 1 to match the band_width use later
-
-	
-	run("Convert to Mask");//thresholded area to white, expanded seeds in black
-	run("Invert");// now expanded seeds in white
-	run("Watershed");
-	rename("delimiter_masks");
-	
-	//loop through nucleus ROIs
-	Initial_seed_count=roiManager("count"); //the count will increase ...
-	for(ROI=0; ROI<Initial_seed_count; ROI++)
-		{
+		if (Verbosity >2)  print("Compartment is "+ LL_Compartment + " ; counts "+roiManager("count"));
+		if (roiManager("count") >0)
+			roiManager("Save", L_ROIfiles[2]);//L_ROI_outpath_cytosoma);// these are resahped according to the image data
 			
-		selectWindow("delimiter_masks");
-		roiManager("Select", ROI);
-		//roiManager("Select", 1);
-		Roi.getBounds(x, y, width, height)
-		doWand(x,y);
-		run("Create Mask"); rename("delimiter"); //new image showing max non-overlapping bounds of current ROI
-		roiManager("Select", ROI);
-	 	run("Make Band...", "band="+band_width-1);
-		run("Create Mask"); rename("bandmask"); 
-		imageCalculator("AND", "bandmask","delimiter"); 
-		selectWindow("bandmask"); 
-		for(erode=0; erode< erosion_count; erode++) run("Erode"); //erode the shape to separate from the nucleus
-		//  note this also erodes from outside so if we really need the max distance, add the erode value to it
-
-		run("Analyze Particles...", "size=1-Infinity add composite"); // add the shape to the ROI manager. Is the min size appropriate?
-		//"//Enable the particle analyzer’s “Composite ROIs” option in the latest daily build (1.53g35) and particles with holes will be handled as expected. https://forum.image.sc/t/analyze-particles-to-include-in-hole-particles/21916/11"
-		 selectWindow("delimiter"); close();
-		 selectWindow("bandmask"); close();
+		if (ROIsToDelete.length >0) //if there is something to delete, including if there is nothing left
+			 updateROIlist(L_ROIfiles, ROIsToDelete);
 		}
-	selectWindow("delimiter_masks"); close();
-	//remove the nulcei now that we have the bands
-	roiManager("Select", newArray(0,Initial_seed_count-1));
-	roiManager("Delete");
+	return;
 	
-	setForegroupdColor = initial_colour;
-	}
+	
+	
+
+	
+	
+	// internal functions below
+	
+
+	function updateROIlist(LL_ROIfiles, ROIsToDelete)
+		{
+		for (i=3; i<LL_ROIfiles.length; i++)
+			{
+			roiManager("deselect");roiManager("delete"); 
+			roiManager("Open", LL_ROIfiles[i]); // this should be the eroded list that we need to further exclude samples from
+			File.delete(LL_ROIfiles[i]); // delete old file 
+			roiManager("select", ROIsToDelete); roiManager("delete"); // remove the ROIs to be discarded
+			roiManager("Save", LL_ROIfiles[i]);// save updated file
+			if (Verbosity >2) {print("counts now "+  roiManager("count") + " in " + LL_ROIfiles[i]);	print("**");}
+			}
+		}
+
+
+	function BandsOrSoma_without_overlap(LLL_Compartment, template_image, max_distance, erosion_count)
+		// this takes a ROImanager list of seeds (nuclei) and expands them all in a non-overlapping way
+		//N.B. if initial seeds overlap, there will be trouble! Seems to be OK if they are just touching
+		//ROImanager ends up with the band ROIs
+		{
+		if (Verbosity >2) print("running BandsOrSoma for "+	LLL_Compartment);		
+		initial_colour = getValue("color.foreground");// temporarily save foreground to ensure fill generates an objective
+		setForegroundColor(255, 255, 255);
+
+		//create new image of correct size to work with masks
+		 	selectWindow(template_image);
+		 	getDimensions(width, height, channels, slices, frames);
+		 	newImage("Seeds", "16-bit black", width, height, 1);	
+		//show all ROIs and burn them into the seeds image
+			roiManager("Fill");//show all ROIs listed as white
+		// shade the surrounding pixels according to distance from ROIs
+				setOption("BlackBackground", true);
+				run("Make Binary");
+			//run voronoi on a copy	and solidify all boundaries
+				run("Select All"); run("Duplicate...", "title=Voronoi");
+				run("Voronoi");	run("Invert");
+				setThreshold(254, 255, "raw");
+				run("Convert to Mask");//thresholded area to white, expanded seeds in black
+					run("Gaussian Blur...", "sigma=3");
+					setThreshold(254, 255, "raw");
+					run("Convert to Mask");//thresholded area to white, expanded seeds in black
+					run("Voronoi");run("Invert");
+				setThreshold(254, 255, "raw");
+				run("Convert to Mask");//thresholded area to white, expanded seeds in black	
+				setAutoThreshold("Huang dark no-reset");run("Convert to Mask");
+	
+			//generate the watershed
+				selectWindow("Seeds");
+				run("Invert"); //black on white background
+			run("Distance Map");//creates gradient of grey levels according to distance
+		
+		// expand seeds by setting up threshold on this gradient to define the distance limits
+		// this defines how far out the delimiter should go. In attovision it is masked against a second channel - we could consider this
+			setAutoThreshold("Default dark");
+		//debug max_distance= 30;
+			setThreshold(max_distance, 255);  //sets areas further from seeds as thresholded (red)
+			run("Convert to Mask");//thresholded area to white, expanded seeds in black
+			run("Invert");// now expanded seeds in white
+		
+		// draw a line between the expanded seeds using the Voronoi
+			imageCalculator("AND create", "Seeds","Voronoi");
+			rename("delimiter_masks");
+	
+		//clean up	
+		selectWindow("Seeds");close();
+		selectWindow("Voronoi");close();
+		
+		//loop through nucleus ROIs
+		Initial_seed_count=roiManager("count"); //the count will increase ...
+		for(ROI=0; ROI<Initial_seed_count; ROI++)
+			{
+			selectWindow("delimiter_masks");
+			roiManager("Select", ROI);
+			//roiManager("Select", 1);
+			//if (ROI>2) stop;
+			Roi.getBounds(x, y, width, height);		
+	//print(x,y,width, height);
+			doWand(x+width/2,y+height/2);
+			run("Create Mask"); rename("compartment"); //new image showing max non-overlapping bounds of current ROI
+			// if (LLL_Compartment=="Cytoplasm") the nucleus should be excluded otherwise skip the next step
+			roiManager("Select", ROI); // needed whether Cyto or Soma
+			if (LLL_Compartment=="Cytoplasm")
+				{
+				rename("delimiter"); 
+				//roiManager("Select", ROI);
+			 	run("Make Band...", "band="+max_distance-1);// band_width-1);
+				run("Create Mask"); rename("compartmentmask"); 
+				imageCalculator("AND create",  "compartmentmask","delimiter"); 
+				rename("compartment");
+				for(erode=0; erode< erosion_count; erode++) run("Erode"); //for band, this erodes the shape to separate from the nucleus
+					//  note this also erodes from outside in both cases so if we really need the max distance, add the erode value to it*** - > add to documentation
+					// note#2 this is not applied to "Soma" compartment, so Soma can never require removal of objects from the nuc list like band loss can
+	    		selectWindow("compartmentmask"); close();
+	    		selectWindow("delimiter"); close();//working on this next
+				}	
+			 							
+			run("Create Selection"); // all discontinuous fragments if any are incuded within ROI
+//print("Selected index " + roiManager("index"));						
+			roiManager("Update");		
+			selectWindow("compartment"); close();		 
+			}
+		selectWindow("delimiter_masks"); close();
+								
+		setForegroundColor(initial_colour);
+		}
+	
+	
+	
+	// function to constrain ROIs to areas of intensity matching a threshold			
+	// assumes ROI list and copy of image for thresholding	(should be bsubbed and smoothed a bit)
+	
+	
+	
+	
+	// 1. black out area outside ROIs on the image - not needed?
+	function blackOutside()
+		{
+		// function to black out all area
+		// join all ROIs together
+		roiManager("deselect");	
+		roiManager("Combine"); // this command causes problems where there are overlaps..
+		//roiManager("Add"); not needed
+		//select all area outside ROIs
+		run("Make Inverse");
+		// add this as a new ROI
+		roiManager("Add");
+		//print(roiManager("count"));
+		// black out the image area outside the ROIs
+		temp = getValue("rgb.foreground");
+	//print(getValue("rgb.foreground"));
+		setForegroundColor(0,0,0);
+		roiManager("select", roiManager("count")-1);
+		roiManager("Fill");//sho
+		setForegroundColor(temp);
+		// remove this outside-ROI ROI
+		roiManager("select", roiManager("count")-1); 
+		roiManager("delete");
+		}
+	
+	
+	//ThresholdROIs(20, 2550);
+	function ThresholdROIs(minThreshold, maxThreshold, L_image)
+		{
+		//2. Modify each ROI to match the above threshold pixels
+		
+		// if they don't meet the threshold, make a note to delete the corresponding nuc ROI as well
+		ROIcount= roiManager("count");
+		nucROIsToRemove=newArray(ROIcount); //array initialises with zeros
+		Array.fill(nucROIsToRemove, -1);// use -1 as nothing to remove because 0 points to the first ROI
+			
+		// select ROI
+		for (ROInumber= ROIcount-1; ROInumber>-1; ROInumber--) //start from the end so a deletion does not change the numbering
+			{
+			//minThreshold = 550;	maxThreshold =3550;	ROInumber=17;
+	//minThreshold = 50; //nearer 5?
+	//maxThreshold =3550;
+	//ROInumber= 4; 
+				selectWindow(L_image);
+//ROInumber=32; minThreshold=20; //print(roiManager("count"));
+				roiManager("select", ROInumber);
+				getSelectionBounds(x, y, w, h);
+	//print(ROIcount, ROInumber,x,y,w,h,minThreshold, maxThreshold);
+				run("Duplicate...", "title=temp");
+				run("Make Inverse"); run("Clear", "slice");// remove nearby material outside, 
+				
+				roiManager("select", ROInumber);
+				setThreshold(0, minThreshold); //the range to discard - might be best to use a smoothed image here? consider bckgd
+	//setThreshold(0, 20);print(getValue("Mean"));
+				run("Create Selection"); // requires 8bit
+//print("thresholding ROI "+ROInumber + "type " + selectionType() +" mean " + getValue("Mean"));
+//print("thresholding ROI type " + selectionType() +" mean " + getValue("Mean"));
+				//check it even exists and later again after thresholding      
+				if (selectionType() != -1)// && getValue("Mean")!=0)  //mean zero is reasonable because we just zeroed it!
+					{
+					run("Set...", "value=0");			
+					//run("Restore Selection"); no
+					setThreshold(minThreshold+1, maxThreshold); //the
+	//setThreshold(020, 3550);
+					run("Make Inverse");
+					if (selectionType() != -1) 
+						{
+						getSelectionBounds(x1, y1, w1, h1);
+	//print(x1,y1,w1,h1); x=1670;y=722;getSelectionBounds(x, y, w, h);print(x,y,w,h);
+					setSelectionLocation(x+x1, y+y1); //if selection loses pixels the position will have shifted
+					roiManager("update"); 	// not roiManager("add");
+						}
+					else 
+						{
+						roiManager("delete");
+						nucROIsToRemove[ROInumber]=ROInumber; // to mark ROI for deletion replace the -1 with the ROI index
+	//print("deleted ROI#"+ROInumber);// this must be saved as an array or the nuc will not have bands
+						}
+					resetThreshold;	
+					//close("temp");
+					}
+				else  
+					{
+					roiManager("delete");	
+					nucROIsToRemove[ROInumber]=ROInumber;
+	//print("deleted ROI#"+ROInumber); //  this must be saved as an array or the nuc will not have bands
+					}
+			close("temp"); // regardless , have to close it
+			//print("Checked ROI#"+ROInumber+"; "+roiManager("count")+" ROIs remaining", x,y,w,h,minThreshold, maxThreshold);		
+			}
+		nucROIsToRemove=Array.deleteValue(nucROIsToRemove, -1);	// remove the -1 from the list as they were just fillers
+		return 	nucROIsToRemove;
+		}	
 
 
 
@@ -3314,14 +3285,14 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 	// saveAs("Results", SavePath + "Results"+well+"ROI-SpatialFeaturesFromCaMAXproj"+".xls"); //saving compartment  data output
 
 	for (i = 0; i<L_channels; i++) //check for nuc only as the segmentation channel may have  no cyt -  updates may  change this?
-	{
-	tablename="Results"+L_well+L_SignalNamesRGB[i]+compartment[0] +".xls";
-	filetoopen = WindowCorrectedSegmentationPath +File.separator +tablename; //deal with double separator
-	if (File.exists(filetoopen) != 1) {
-		if (Verbosity >1) {print(filetoopen + " does not exist. Will try next well."); print("");}
-		; return false ; // indicates well is aborted
-		} // skip to next L_well
-	}
+		{
+		tablename="Results"+L_well+L_SignalNamesRGB[i]+compartment[0] +".xls";
+		filetoopen = WindowCorrectedSegmentationPath +File.separator +tablename; //deal with double separator
+		if (File.exists(filetoopen) != 1) {
+			if (Verbosity >1) {print(filetoopen + " does not exist. Will try next well."); print("");}
+			; return false ; // indicates well is aborted
+			} // skip to next L_well
+		}
 
 
 
@@ -3389,12 +3360,14 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 	L_numtimepoints = newArray(L_channels);
 
 
-
+	SomaCompartmentExists= newArray(L_channels); // fill this from below
+	
 	for (i=0; i<L_channels; i++) 
 		{ //for KTR L_SignalNamesRGB there are two compartments
-			for (j=0; j<2; j++) 
+			for (j=0; j<compartment.length; j++) 
 				{
-				ExtractIvTmean_v2(L_path+ L_SegmentationFolder + File.separator, L_well, L_SignalNamesRGB[i],compartment[j], L_TWindow); //returns e.g. ERKnuc and ERKnucT
+				success=ExtractIvTmean_v2(L_path+ L_SegmentationFolder + File.separator, L_well, L_SignalNamesRGB[i],compartment[j], L_TWindow); //returns e.g. ERKnuc and ERKnucT
+				if (j==2) SomaCompartmentExists[i]= success; // otherwise return value not used
 				}	
 			selectWindow(L_SignalNamesRGB[i]+compartment[0]+"T"); //getDimensions(width, height, channels, slices, frames); 	
 			numL_cells = getHeight(); //height;
@@ -3414,7 +3387,44 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 		
 	if(ShapeFeaturesExist) 
 		{
-		tablename =  "Results"+L_well+"ROI-SpatialFeaturesFromCaMAXproj"+".xls";
+		//DEBUG - there may be two or three morpho files now, adapt here, but keep compatibility with earlier formats!
+		MorphologyParameterPostfix = newArray("CaMAXproj", "Band", "Soma");
+		
+		
+		for (j=0; j<compartment.length; j++)
+			value=MorphologyDataPrep(MorphologyParameterPostfix[j], compartment[j]);
+			if (value != false) numFeatures= value; //function returns num features and we need it later - maybe better to get the info later?
+			//if compartment does not exist, returns false
+		
+		function MorphologyDataPrep(postfix, compartmentname)
+			{
+			tablename =  "Results"+L_well+"ROI-SpatialFeaturesFrom" +postfix +".xls";
+			if(L_TWindow!="") 	L_file=L_path +L_SegmentationFolder + File.separator+L_TWindow+File.separator+tablename; 
+				else L_file=L_path +L_SegmentationFolder + File.separator + tablename; 
+			if (!File.exists(L_file)) return false;
+				
+			txtImg= replace(File.openAsString(L_file), "\t", ","); //xls file full of tabs, looks like we need commas for run("Text Image..."
+				txtImg=substring(txtImg, indexOf(txtImg, "\n")+1); //remove first line which is a header
+			if (File.exists(L_file+"temp.csv")) a=File.delete(L_file+"temp.csv"); //if there is an old one, delete AND make sure it is gone 
+			do {wait(2);} while(File.exists(L_file+"temp.csv")); 
+		
+			File.saveString(txtImg, L_file+"temp.csv");
+			//open it once it is available
+			do {wait(2);} while(!File.exists(L_file+"temp.csv"));
+			run("Text Image... ", "open=["+L_file+"temp.csv]"); 
+				//remove the 1st (rowname) column
+				getDimensions(width, height, tempchannels, slices, frames); // don't overwrite L_channels
+				makeRectangle(1, 0, width, height);	
+				run("Crop");
+			rename("ShapeFeatures"+"_"+compartmentname);
+
+			 //because IvT fn was good for the others (it skips 2/3 of columns) but not for this one, the cells are vertical in xls not horizontal and all values needed
+			numFeatures= getWidth();
+			newImage("ShapeFeatures"+"_"+compartmentname+"_"+ "Thresholded", "32-bit black", numFeatures, numL_cells, 1); //create container for Ca data L_passing threshold 
+			//NormalisedThreshold object will be generated from this after completion of Thresholding	
+			return numFeatures;
+			}
+		/*tablename =  "Results"+L_well+"ROI-SpatialFeaturesFromCaMAXproj"+".xls";
 		if(L_TWindow!="") 	L_file=L_path +L_SegmentationFolder + File.separator+L_TWindow+File.separator+tablename; 
 		else L_file=L_path +L_SegmentationFolder + File.separator + tablename; 
 
@@ -3437,6 +3447,7 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 		numFeatures= getWidth();
 		newImage("ShapeFeatures"+ "Thresholded", "32-bit black", numFeatures, numL_cells, 1); //create container for Ca data L_passing threshold 
 		//NormalisedThreshold object will be generated from this after completion of Thresholding
+		*/
 	 }
 	 
 	//generate images to identify min, max and average values for each channel for all L_cells
@@ -3462,13 +3473,20 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 				run("Duplicate...", "title="+L_SignalNamesRGB[i] + "values"+" duplicate");
 				} //run("Concatenate...", "  title=["+L_SignalNamesRGB[i] + "values] keep image1="+L_SignalNamesRGB[i][i]+compartment[0]+" image2="+L_SignalNamesRGB[i][i]+compartment[1]+" image3=[-- None --]");
 			else //"normal" channels
-				{
-				run("Concatenate...", "  title=["+L_SignalNamesRGB[i] + "values] keep image1="+L_SignalNamesRGB[i]+compartment[0]+" image2="+L_SignalNamesRGB[i]+compartment[1]+" image3=[-- None --]");				
+				{//DEBUG function needs to know if soma exists		
+				ConcatenateString = "  title=["+L_SignalNamesRGB[i] + "values] keep image1="+L_SignalNamesRGB[i]+compartment[0]+" image2="+L_SignalNamesRGB[i]+compartment[1];
+				if (!SomaCompartmentExists[i]) ConcatenateString = ConcatenateString + " image3=[-- None --]";				
+					else 					 ConcatenateString = ConcatenateString + " image3="+L_SignalNamesRGB[i]+compartment[2] + " image4=[-- None --]";				
+				run("Concatenate...", ConcatenateString);				
 				}
 			}	
 		
 		// close all compartment images including the calcium one that was not actually used in the present script 	
-		for (j=0;j<2;j++) {selectWindow(L_SignalNamesRGB[i]+compartment[j]); close();} //closes ALL nuc/band compartment images now and we only have [Channel]values //- ERKnuc, JNKnuc, ERKband, JNKband; now we have ErkValues, JNKValues	
+		for (j=0;j<compartment.length;j++) 
+			{
+			ArrayName=L_SignalNamesRGB[i]+compartment[j];
+			if (isOpen(ArrayName)) {selectWindow(ArrayName); close();} //as soma might not exist 	
+			} //closes ALL nuc/band compartment images now and we only have [Channel]values //- ERKnuc, JNKnuc, ERKband, JNKband; now we have ErkValues, JNKValues	
 		
 		
 		if (nSlices!=1) //catch error when there happens to be only a single plane in the experiment 
@@ -3476,11 +3494,11 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 			//selectWindow(L_SignalNamesRGB[i] + "values");
 			//print(nSlices);
 			
-			for (j=0; j< lengthOf(ThresholdTypes); j++) // use the ThresholdTypes string array
+			for (k=0; k< lengthOf(ThresholdTypes); k++) // use the ThresholdTypes string array
 				{
 				selectWindow(L_SignalNamesRGB[i] + "values");
-				run("Z Project...", "projection=["+ThresholdTypes[j]+" Intensity]"); 
-				rename(L_SignalNamesRGB[i]+ThresholdTypes[j]);
+				run("Z Project...", "projection=["+ThresholdTypes[k]+" Intensity]"); 
+				rename(L_SignalNamesRGB[i]+ThresholdTypes[k]);
 				}
 			/*selectWindow(L_SignalNamesRGB[i] + "values");
 			run("Z Project...", "projection=[Min Intensity]"); rename(L_SignalNamesRGB[i]+"Min");
@@ -3490,10 +3508,10 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 		else
 			{
 			selectWindow(L_SignalNamesRGB[i] + "values");	
-			for (j=0;j<lengthOf(ThresholdTypes);j++)
+			for (k=0;k<lengthOf(ThresholdTypes);k++)
 				{
 				run("Select All"); 
-				run("Duplicate...", "title="+L_SignalNamesRGB[i]+ThresholdTypes[j]+" duplicate");
+				run("Duplicate...", "title="+L_SignalNamesRGB[i]+ThresholdTypes[k]+" duplicate");
 				}
 			/*run("Select All"); run("Duplicate...", "title="+L_SignalNamesRGB[i]+"Avg"+" duplicate"); 
 			run("Select All"); run("Duplicate...", "title="+L_SignalNamesRGB[i]+"Min"+" duplicate"); 
@@ -3505,8 +3523,9 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 	if (Verbosity >2) print("created Avg windows");
 	if (Verbosity >2) print("created Min and Max windows");
 
-
-	for (i=0; i<L_channels; i++) // Generate cyt nuc ratios for ALL channels - i) for KTR ratios and ii) include Ca as QC if NLS, but calculate the other ratio images now to copy them to new images
+ 	// Generate cyt nuc ratios for ALL channels - i) for KTR ratios and ii) include Ca as QC if NLS, but calculate the other ratio images now to copy them to new images
+ 	// here don't need to worry about soma images
+	for (i=0; i<L_channels; i++)
 		{
 		imageCalculator("Divide create 32-bit", L_SignalNamesRGB[i]+compartment[1]+"T",L_SignalNamesRGB[i]+compartment[0]+"T"); // generate cyt/nuc ratio image and //band by nuc for each signal
 		rename(L_SignalNamesRGB[i]+"AllCells");	//THIS MEANS RATIOS!
@@ -3520,9 +3539,10 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 
 
 	//keep Calcium  channel to save cyt and nuc separately later - no I want all channels saved now!
+	// creating container for soma too even if don't use
 	for (i=0; i<L_channels; i++)//these are shorter than the calcium ones if there are many more calcium timepoints
 		{
-		if(i!=L_CalciumChannel-1) {for (j=0;j<2;j++) newImage(L_SignalNamesRGB[i]+ compartment[j]+"Thresholded", "32-bit black", L_numtimepoints[i], numL_cells, 1);}//create containers for data L_passing threshold // no data but height cannot be zero - > will crop off at end!
+		if(i!=L_CalciumChannel-1) {for (j=0;j<compartment.length;j++) newImage(L_SignalNamesRGB[i]+ compartment[j]+"Thresholded", "32-bit black", L_numtimepoints[i], numL_cells, 1);}//create containers for data L_passing threshold // no data but height cannot be zero - > will crop off at end!
 		}
 	//***************************************************************************************** 
 
@@ -3531,9 +3551,9 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 	//operation on Ca  channel i.e. channel with more datapoints, if (CaChannelNumber!=-1)
 	if (L_CalciumChannel!=-1)
 	{
-	 for (j=0; j <2; j++) 
+	 for (j=0; j <compartment.length; j++) 
 		{
-		newImage(L_SignalNamesRGB[L_CalciumChannel-1]+ compartment[j]+ "Thresholded", "32-bit black", L_numtimepoints[L_CalciumChannel-1], numL_cells, 1); 
+		newImage(L_SignalNamesRGB[L_CalciumChannel-1]+ compartment[j]+ "Thresholded", "32-bit black", L_numtimepoints[L_CalciumChannel-1], numL_cells, 1); 		
 		}//create containers for Ca compartment data passing threshold // no data but height cannot be zero - > will crop off at end!
 		selectWindow(L_SignalNamesRGB[L_CalciumChannel-1]+"big"+compartment[0]+"T"); rename(L_SignalNamesRGB[L_CalciumChannel-1]+"bigAllCells"); //print(signal[2] +"AllCells");
 		newImage(L_SignalNamesRGB[L_CalciumChannel-1]+ "bigThresholded", "32-bit black", L_numtimepoints[L_CalciumChannel-1], numL_cells, 1); //create container for Ca data L_passing threshold 
@@ -3567,10 +3587,10 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 		//pick up values frommin and max values o  segmentation channel ? no, of all channels!
 		for(i=0;i<L_channels;i++)  //found bug here L_channels-1 - since when??
 			{
-			for(j=0; j<3; j++)
+			for(k=0; k<3; k++)
 				{
-					selectWindow(L_SignalNamesRGB[i]+ThresholdTypes[j]); 
-					L_checkvalue[i+j*L_channels] = getPixel(L_cell,0); 
+					selectWindow(L_SignalNamesRGB[i]+ThresholdTypes[k]); 
+					L_checkvalue[i+k*L_channels] = getPixel(L_cell,0); 
 					//debug print("readings for " + L_SignalNamesRGB[i]+ThresholdTypes[j] + " is " + L_checkvalue[i+j*L_channels]);
 				}	
 			}
@@ -3605,17 +3625,20 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 					 selectWindow(L_SignalNamesRGB[i]+ "Thresholded");
 					 makeRectangle(0, L_cellspastthreshold, L_numtimepoints[i], 1);
 					 run("Paste");
-					 for (j=0;j<2;j++)
+					 for (j=0;j<compartment.length;j++)
 						{// this is for calcium data from compartments - is it always needed when reporter in nuc? Maybe as QC not yet implemented?
 						//step 1 - collect the thresholded cells once per loop
-						selectWindow(L_SignalNamesRGB[i]+compartment[j]+"T"); 
-						makeRectangle(0, L_cell, L_numtimepoints[i], 1);//longer for Calcium usually
-						run("Copy");
-						selectWindow(L_SignalNamesRGB[i]+ compartment[j]+ "Thresholded");
-						makeRectangle(0, L_cellspastthreshold, L_numtimepoints[i], 1);
-						run("Paste");
-						}		 
-					 }
+						ArrayName=L_SignalNamesRGB[i]+compartment[j]+"T";
+						if (isOpen(ArrayName))
+							{
+							selectWindow(ArrayName); 
+							makeRectangle(0, L_cell, L_numtimepoints[i], 1);//longer for Calcium usually
+							run("Copy");
+							selectWindow(L_SignalNamesRGB[i]+ compartment[j]+ "Thresholded");
+							makeRectangle(0, L_cellspastthreshold, L_numtimepoints[i], 1);
+							run("Paste");
+							}		 
+					 	}
 				
 				//CALCIUM-SPECIFIC SECTION HERE*****************************************	 
 				if (L_CalciumChannel!=-1) //this section is specifically for calcium or related channel that likely has  more timepoints
@@ -3634,14 +3657,24 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 					}
 					//Shape section begins here
 				if(ShapeFeaturesExist) 
-					{//for Features, normalistaion is across all cells not across features, so this has to be done outside this cell-by-cell loop
-					selectWindow("ShapeFeatures");
-					makeRectangle(0, L_cell, numFeatures, 1);
-					run("Copy");
-					selectWindow("ShapeFeatures"+ "Thresholded");
-					makeRectangle(0, L_cellspastthreshold, numFeatures, 1);
-					run("Paste");
-					} // Shape section ends here
+					{//for Features, normalistaion is across all cells not across features, so this has to be done outside this cell-by-cell loop	
+					 for (j=0;j<compartment.length;j++)
+						{
+						ArrayName="ShapeFeatures_"+compartment[j];
+						if (isOpen(ArrayName))
+							{
+							selectWindow(ArrayName);
+							makeRectangle(0, L_cell, numFeatures, 1);
+							run("Copy");
+							selectWindow("ShapeFeatures_"+compartment[j]+ "_Thresholded");
+//BUG HERE what is nuFeatiures?
+							makeRectangle(0, L_cellspastthreshold, numFeatures, 1);
+							run("Paste");
+							}
+						}	
+					} // Shape section ends here	
+				} //channel loop
+					
 				L_cellspastthreshold ++;
 				} //end if cell passed 
 			else CellThresoldStatus[L_cell]=0;	//  current cell did not pass
@@ -3649,7 +3682,7 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 	
 	// close cell-wise thresholding data	
 		for(i=0;i<L_channels;i++) 
-			{for(j=0; j<lengthOf(ThresholdTypes); j++)	{selectWindow( L_SignalNamesRGB[i]+ThresholdTypes[j] ); close(); }	}
+			{for(k=0; k<lengthOf(ThresholdTypes); k++)	{selectWindow( L_SignalNamesRGB[i]+ThresholdTypes[k] ); close(); }	}
 		//for(i=0;i<L_channels;i++) { CloseSelectWindows(newArray(L_SignalNamesRGB[i]+"Avg",L_SignalNamesRGB[i]+"Min", L_SignalNamesRGB[i]+"Max" ));				
 	//allcell and thresholded cell traces generated for all channels
 	//print(L_SignalNamesRGB[NumeratorChannel]+compartment[j]+ "Thresholded", L_SignalNamesRGB[DenominatorChannel]+compartment[j]+ "Thresholded");
@@ -3658,15 +3691,32 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 	//L_cellspastthreshold started at 0 so at the end of the loop it equals the total cells past threshold
 	//all collected data - currently open as cell by time images - should be cropped down to size and normalised
 	//normalise Features - //bycell uses max min for x-min/(max-min) full normalisation. Bug - "-min" works in tests but not in macro - why not?
-print("creating ShapeFeaturesNormalisedThresholded");
+	if (Verbosity >2) print("creating ShapeFeaturesNormalisedThresholded");
 	if((ShapeFeaturesExist)*(L_cellspastthreshold !=0)) 
 		{
-		selectWindow("ShapeFeaturesThresholded"); 	run("Canvas Size...", "width="+numFeatures+" height="+L_cellspastthreshold+" position=Top-Center zero");
-		generateNormalisedImage("bycell", "ShapeFeaturesThresholded", "ShapeFeaturesNormalisedThresholded", numFeatures, L_cellspastthreshold, 0); //usage bycell|byvalue, imagenameprefix, imagenamepostfix, width, height, special-parameter -> seeks prevfix+postfix, outputs prefix+Normalised
+		for (j=0;j<compartment.length;j++)
+				{
+					
+			
+				ArrayName="ShapeFeatures_"+compartment[j]+"_Thresholded";
+				if (isOpen(ArrayName))
+					{			
+					selectWindow(ArrayName);
+					run("Canvas Size...", "width="+numFeatures+" height="+L_cellspastthreshold+" position=Top-Center zero");
+					generateNormalisedImage("bycell", ArrayName, "ShapeFeatures_"+compartment[j]+"_NormalisedThresholded", numFeatures, L_cellspastthreshold, 0); //usage bycell|byvalue, imagenameprefix, imagenamepostfix, width, height, special-parameter -> seeks prevfix+postfix, outputs prefix+Normalised
+					}
+				}	
 		}
 print("done creating ShapeFeaturesNormalisedThresholded");
 	// cleanup non-calcium and calcium channels 
-	for (i=0; i<L_channels;i++) {for(j=0; j<2; j++) {selectWindow(L_SignalNamesRGB[i]+compartment[j]+"T"); close();}}
+	for (i=0; i<L_channels;i++) 
+		{
+		for(j=0; j<compartment.length; j++)
+				{
+				ArrayName=L_SignalNamesRGB[i]+compartment[j]+"T"; 
+				if (isOpen(ArrayName)) {selectWindow(ArrayName); close();}
+				}
+		}
 	if (Verbosity >2) print(L_cellspastthreshold + " L_cells past threshold");
 	if (Verbosity >1) print(d2s(100* L_cellspastthreshold/numL_cells, 0) + "% of L_cells L_passed threshold "+L_ThresholdCode + " in L_well "+L_well + " of "+L_path);
 
@@ -3677,50 +3727,52 @@ print("done creating ShapeFeaturesNormalisedThresholded");
 	RatioNames=newArray(); // so RatioNames.length =0 can be used later if there are none
 	if ((L_cellspastthreshold != 0) && (L_RatioPairs.length >0))
 		{
-		RatioNames = newArray(2*L_RatioPairs.length); //2 compartments hard-coded here
+		RatioNames = newArray(compartments.length*L_RatioPairs.length); //>2 compartments allowed here but not always used  - check they exist
 		for (CurrentRatio=0;CurrentRatio<L_RatioPairs.length; CurrentRatio++)
 			{
 			CurrentPair=split(L_RatioPairs[CurrentRatio], "v"); //cannot use : or /  because excel converts it to date etc
 			NumeratorChannel=parseInt(CurrentPair[0])-1;
 			DenominatorChannel=parseInt(CurrentPair[1])-1;
 			// first consider special case that NumeratorChannel == L_CalciumChannel 
+			
+			//the following uses only two compartments - this is a substitute soma calculation when there is no soma compartment	
 			if (NumeratorChannel == L_CalciumChannel-1) // in this case we estimate denominator intensity from the 2 compartments and expanded to match the Ca time interval
 				{
+				open(WindowCorrectedSegmentationPath +"/Segmentation"+L_well+".tif");	rename("canvas");		
 				// define an array of extra images we'll need to clean up later//assumes 2 compartments
 				NewTempImages = newArray("canvas", "AreaOfCompartment0", "AreaOfCompartment1", "AreaBybandSignal", "AreaBynucSignal", "SumSignal", "AreaSum");// keep "AreaNormSignal" and close separately
-					
-				open(WindowCorrectedSegmentationPath +"/Segmentation"+L_well+".tif");	rename("canvas");
-				for (CurrentCompartment=0;CurrentCompartment <compartment.length; CurrentCompartment++)
+				for (CurrentCompartment=0;CurrentCompartment <2; CurrentCompartment++)
 					{
-					roiManager("Open",WindowCorrectedSegmentationPath +"/ROI" + compartment[CurrentCompartment]+L_well+".zip");
-					NumberOfROIs = roiManager("count"); //print(NumberOfROIs);
-					newImage("AreaOfCompartment"+CurrentCompartment, "32-bit black", 1, L_cellspastthreshold, 1); //make space for cells past threshold only
-					//run("Properties...", "channels=1 slices=1 frames=1 pixel_width=1 pixel_height=1 voxel_depth=1.0000000 frame=[1 min]");
-					Area=newArray(NumberOfROIs);
-					selectWindow("canvas"); // thus area is calibrated in um not pixels. 
-					for (ROI=0; ROI <NumberOfROIs; ROI++) {roiManager("Select", ROI);Area[ROI]=getValue("Area");}
-					CurrentCell =0;
-					selectWindow("AreaOfCompartment"+CurrentCompartment);
-					//BUG I have seen NumberOfROIs > CellThresoldStatus.length - when did an extra ROI get added?
-					for (ROI=0; ROI < NumberOfROIs; ROI++)  if (CellThresoldStatus[ROI]) {setPixel(0,CurrentCell,Area[ROI]); CurrentCell++;} //faster with 2 loops				
-					run("Size...", "width="+ L_numtimepoints[DenominatorChannel]+" interpolation=None"); //   resize width as width*compressionfactor
-					killROImanager();
-					
-					DenominatorData=L_SignalNamesRGB[DenominatorChannel]+compartment[CurrentCompartment]+"Thresholded"; //already open				
-					imageCalculator("Multiply create 32-bit", DenominatorData, "AreaOfCompartment"+CurrentCompartment); 
-					rename("AreaBy"+compartment[CurrentCompartment]+"Signal"); 			
+					ROIfilepath=WindowCorrectedSegmentationPath +"/ROI" + compartment[CurrentCompartment]+L_well+".zip";	
+					if (File.exists(ROIfilepath))
+						{
+						roiManager("Open",WindowCorrectedSegmentationPath +"/ROI" + compartment[CurrentCompartment]+L_well+".zip");
+						NumberOfROIs = roiManager("count"); //print(NumberOfROIs);
+						newImage("AreaOfCompartment"+CurrentCompartment, "32-bit black", 1, L_cellspastthreshold, 1); //make space for cells past threshold only
+						//run("Properties...", "channels=1 slices=1 frames=1 pixel_width=1 pixel_height=1 voxel_depth=1.0000000 frame=[1 min]");
+						Area=newArray(NumberOfROIs);
+						selectWindow("canvas"); // thus area is calibrated in um not pixels. 
+						for (ROI=0; ROI <NumberOfROIs; ROI++) {roiManager("Select", ROI);Area[ROI]=getValue("Area");}
+						CurrentCell =0;
+						selectWindow("AreaOfCompartment"+CurrentCompartment);
+//????BUG I have seen NumberOfROIs > CellThresoldStatus.length - when did an extra ROI get added?
+						for (ROI=0; ROI < NumberOfROIs; ROI++)  if (CellThresoldStatus[ROI]) {setPixel(0,CurrentCell,Area[ROI]); CurrentCell++;} //faster with 2 loops				
+						run("Size...", "width="+ L_numtimepoints[DenominatorChannel]+" interpolation=None"); //   resize width as width*compressionfactor
+						killROImanager();			
+						DenominatorData=L_SignalNamesRGB[DenominatorChannel]+compartment[CurrentCompartment]+"Thresholded"; //already open				
+						imageCalculator("Multiply create 32-bit", DenominatorData, "AreaOfCompartment"+CurrentCompartment); 
+						rename("AreaBy"+compartment[CurrentCompartment]+"Signal"); 			
+						}
 					}	
-					
-				//the following assume only two compartments
 				imageCalculator("Add create 32-bit", "AreaOfCompartment0","AreaOfCompartment1"); rename("AreaSum");  //assumes only 2 compartments
 				imageCalculator("Add create 32-bit", "AreaBynucSignal","AreaBybandSignal"); rename("SumSignal");  //assumes only 2 compartments
 				imageCalculator("Divide create 32-bit", "SumSignal","AreaSum"); rename("AreaNormSignal");  //expand output to match calcium
 				run("Size...", "width="+ L_numtimepoints[L_CalciumChannel-1]+" interpolation=None"); //   resize width as width*compressionfactor
 
-				// now we have the 2-compartment Denominator estimate for ratioing the fast calcium data
+				// now we have the 3-compartment Denominator estimate for ratioing the fast calcium data
 				CloseSelectWindows(NewTempImages); // clean up those extra images
 				//algorithm based on nuclear calcium but data for both compartments exist
-				for (CurrentCompartment=0;CurrentCompartment <compartment.length; CurrentCompartment++)
+				for (CurrentCompartment=0;CurrentCompartment <2; CurrentCompartment++)
 					{ //here is the problem the Ca is thresholded, the Ratio is not
 					NumeratorData="Ca"+compartment[CurrentCompartment]+ "Thresholded";
 					RatioNames[2*CurrentRatio+CurrentCompartment] ="Ratio"+L_SignalNamesRGB[NumeratorChannel]+"by"+L_SignalNamesRGB[DenominatorChannel]+compartment[CurrentCompartment];
@@ -3732,13 +3784,15 @@ print("done creating ShapeFeaturesNormalisedThresholded");
 					Normoutfile =RatioNames[2*CurrentRatio+CurrentCompartment]+"NormalisedThresholdedCells"; 
 					condensedoutfile=RatioNames[2*CurrentRatio+CurrentCompartment]+"CondensedNormalisedThresholdedCells";		
 					saveCellbyTimeFileset(infile, outfile, Normoutfile, condensedoutfile, CondenseFactor, outpathkernel, L_numtimepoints[NumeratorChannel], L_cellspastthreshold, getNormalisationMethod(NumeratorChannel, L_CalciumChannel), L_BaselineReads);
+					// will return false if infile does not exist e.g. soma compartment does not exist - but this is 2 compartment only here
 					}
 				selectWindow("AreaNormSignal");close();
 				}
 			else
 				{
-				for (CurrentCompartment=0;CurrentCompartment<2;CurrentCompartment++)
-					{
+				for (CurrentCompartment=0;CurrentCompartment<compartment.length;CurrentCompartment++) //3 compartments allowed here
+					{					
+					//array was defined to be large enough
 					RatioNames[2*CurrentRatio+CurrentCompartment] ="Ratio"+L_SignalNamesRGB[NumeratorChannel]+"by"+L_SignalNamesRGB[DenominatorChannel]+compartment[CurrentCompartment];
 					NumeratorImage=L_SignalNamesRGB[NumeratorChannel]+compartment[CurrentCompartment]+ "Thresholded";
 					DemonimatorImage=L_SignalNamesRGB[DenominatorChannel]+compartment[CurrentCompartment]+ "Thresholded";
@@ -3751,6 +3805,8 @@ print("done creating ShapeFeaturesNormalisedThresholded");
 					Normoutfile =RatioNames[2*CurrentRatio+CurrentCompartment]+"NormalisedThresholdedCells"; 
 					condensedoutfile="";
 					saveCellbyTimeFileset(infile, outfile, Normoutfile, condensedoutfile, CondenseFactor, outpathkernel, L_numtimepoints[NumeratorChannel], L_cellspastthreshold, getNormalisationMethod(NumeratorChannel, L_CalciumChannel), L_BaselineReads);
+					// will return false if infile does not exist e.g. soma compartment does not exist - but this is 2 compartment only here
+// this will need specific verification with ratio images
 					}
 				}
 			}
@@ -3768,11 +3824,12 @@ print("done creating ShapeFeaturesNormalisedThresholded");
 			infile=L_SignalNamesRGB[i]+"Thresholded"; 
 			outfile= L_SignalNamesRGB[i]+"cytbynucThresholdedCells"; Normoutfile =L_SignalNamesRGB[i]+"cytbynucNormalisedThresholdedCells"; 
 			condensedoutfile="";
-			saveCellbyTimeFileset(infile, outfile, Normoutfile, condensedoutfile, CondenseFactor, outpathkernel, L_numtimepoints[i], L_cellspastthreshold, getNormalisationMethod(i, L_CalciumChannel), L_BaselineReads);
+			saveCellbyTimeFileset(infile, outfile, Normoutfile, condensedoutfile, CondenseFactor, outpathkernel, L_numtimepoints[i], L_cellspastthreshold, 
+			getNormalisationMethod(i, L_CalciumChannel), L_BaselineReads);
 			//by compartment has different baseline read count for calcium and other channels
 			adjustedbaselinereads= L_BaselineReads;
 			if(i==L_CalciumChannel) adjustedbaselinereads= L_BaselineReads*CondenseFactor;
-			for (j=0;j<2;j++)
+			for (j=0;j<compartment.length;j++)
 				{
 				infile=L_SignalNamesRGB[i]+ compartment[j]+ "Thresholded"; outfile=infile+"Cells"; Normoutfile =L_SignalNamesRGB[i]+compartment[j]+ "NormalisedThresholdedCells";condensedoutfile="";
 				saveCellbyTimeFileset(infile, outfile, Normoutfile, condensedoutfile, CondenseFactor, outpathkernel, L_numtimepoints[i], L_cellspastthreshold, getNormalisationMethod(i,L_CalciumChannel), adjustedbaselinereads);
@@ -3781,17 +3838,22 @@ print("done creating ShapeFeaturesNormalisedThresholded");
 		else // close files
 			{
 			selectWindow(L_SignalNamesRGB[i]+ "Thresholded"); close(); //the other images generated from this were never generated if no cells passed threshold//print("Saving "+signal[i]+ "Thresholded" + " as " +L_path + "Results"+L_well +signal[i]+"cytbynucThresholdedCells");
-			for (j=0;j<2;j++) 
+			for (j=0;j<compartment.length;j++) 
 				{
-				selectWindow(L_SignalNamesRGB[i]+ compartment[j]+ "Thresholded"); close();
+				ArrayName=L_SignalNamesRGB[i]+ compartment[j]+ "Thresholded";
+				if (isOpen(ArrayName)) {selectWindow(ArrayName); close();}
 				if (L_cellspastthreshold !=0) //if not then there cannot have been a normalisation
-					{selectWindow(L_SignalNamesRGB[i]+ compartment[j]+ "NormalisedThresholded"); close();}
+					{
+					ArrayName=L_SignalNamesRGB[i]+ compartment[j]+ "NormalisedThresholded"); 
+					if (isOpen(ArrayName)) {selectWindow(ArrayName); close();}
+					}
+					
 				}
 			}	
 		
 	}	
 
-		
+	
 	if (L_CalciumChannel!=-1)
 		{			
 		i=L_CalciumChannel-1;//if(L_SignalNamesRGB[2]=="Ca") no longer assumed
@@ -3815,25 +3877,46 @@ print("done creating ShapeFeaturesNormalisedThresholded");
 					{selectWindow(L_SignalNamesRGB[i]+ "bigNormalisedThresholded"); close();}	
 			}
 		} //end if thresholded cells for calcium files
-	
+
+		
 	//now the shape features
 	if(ShapeFeaturesExist)
 		{
-			selectWindow("ShapeFeatures");
-			saveAs("Tiff", outpathkernel +"ShapeFeatures"+"AllCells"); close();
-			if (L_cellspastthreshold !=0) 
+		for (j=0;j<compartment.length;j++)
 				{
-				selectWindow("ShapeFeatures"+ "Thresholded");saveAs("Tiff", outpathkernel +"ShapeFeatures"+"ThresholdedCells"); close(); //run("Canvas Size...", "width="+numFeatures +" height="+L_cellspastthreshold+" position=Top-Center zero"); //
-				selectWindow("ShapeFeatures"+ "NormalisedThresholded"); saveAs("Tiff", outpathkernel +"ShapeFeatures"+"NormalisedThresholdedCells"); close();
+
+//BUG HERE - there is no window without extra names, should there be??
+				ArrayName="ShapeFeatures_"+compartment[j];
+				if (isOpen(ArrayName))
+					{
+					selectWindow(ArrayName);
+					saveAs("Tiff", outpathkernel +ArrayName+"AllCells"); 
+						if (j==0) saveAs("Tiff", outpathkernel +"ShapeFeatures"+"AllCells");  //keep 0, named as it wasm for backward compatibility below
+						close();
+					if (L_cellspastthreshold !=0) 
+						{
+						selectWindow(ArrayName+ "_Thresholded");saveAs("Tiff", outpathkernel +ArrayName+"_ThresholdedCells"); 
+						if (j==0) saveAs("Tiff", outpathkernel +"ShapeFeatures"+"ThresholdedCells");
+						close(); //keep 0 for backward compatibility below //run("Canvas Size...", "width="+numFeatures +" height="+L_cellspastthreshold+" position=Top-Center zero"); //
+						selectWindow(ArrayName+  "_NormalisedThresholded"); saveAs("Tiff", outpathkernel +ArrayName+"_NormalisedThresholdedCells"); 
+						if (j==0) saveAs("Tiff", outpathkernel +"ShapeFeatures"+"NormalisedThresholdedCells");
+						close(); //keep 0 for backward compatibility below
+						}
+					else
+						{
+						selectWindow(ArrayName+"_Thresholded"); close(); //if no cells then no Normalised file to close
+						}
+					}
 				}
-			else
-				{
-				selectWindow("ShapeFeatures"+ "Thresholded"); close(); //if no cells then no Normalised file to close
-				}
+						
+			
 		}
 
 return true ; //indicates well not aborted
 //setBatchMode(false);
+
+
+//done EDITING 29239321 01:00 now to test!!
 }
 
 
@@ -3842,76 +3925,60 @@ return true ; //indicates well not aborted
 
 
 function getNormalisationMethod(channel, LL_CalciumChannel)	//i.e. for i=2 calcium use the median because average not appropriate for spike data and median not for few datapoints
-{
-if(channel !=LL_CalciumChannel)
- return "byvalue_baselineaverage"; 
-else 
- return "byvalue_baselinemedian";
-} 
-
-
-
-
-
-
-
-
-function ExtractIvTmean(L_currentpath, L_currentwell, L_signal, L_compartment,L_TWindow) 
-{
-tablename="Results"+L_currentwell+L_signal+L_compartment+".xls";
-if(L_TWindow!="")
-	{open(L_currentpath +L_TWindow+File.separator+ tablename); }
-	else
-	{open(L_currentpath + tablename); }
-	v=getVersion(); vn=parseFloat(substring(v,lengthOf(v)-5, lengthOf(v)-1)); 	if(vn>1.51) 	Table.rename(tablename, "Results");//v1.52a onwards allows all kinds of table names	
-	if (isOpen("Results")) {selectWindow("Results"); setLocation(screenWidth, screenHeight);}
-	run("Results to Image"); 
-setBatchMode("exit and display");stop;
-	rename("temp");
-	run("Reslice [/]...", "output=1.000 start=Top avoid");
+	{
+	if(channel !=LL_CalciumChannel)
+	 return "byvalue_baselineaverage"; 
+	else 
+	 return "byvalue_baselinemedian";
+	} 
 	
-	rename(L_signal+L_compartment);
-	run("Reslice [/]...", "output=1.000 start=Top rotate avoid");
-	rename(L_signal+L_compartment+"T");
-	selectWindow("temp"); close();
-	/*selectWindow("temp2"); close();*/
-}
+
+
+
+
+
+
 
 function ExtractIvTmean_v2(L_currentpath, L_currentwell, L_signal, L_compartment,L_TWindow)  //do not use results window
-{
-tablename="Results"+L_currentwell+L_signal+L_compartment+".xls";
-if(L_TWindow!="") file=L_currentpath +L_TWindow+File.separator+ tablename; 
-else file= L_currentpath + tablename; 
-tempfile=L_currentpath+"tempResults.csv";
-
-//print(tablename);
-
-txtImg= replace(File.openAsString(file), "\t", ","); //xls file full of tabs, looks like we need commas for run("Text Image..."
-txtImg=substring(txtImg, indexOf(txtImg, "\n")+1); //remove first line which is a header
-
-if (File.exists(tempfile)) a=File.delete(tempfile); //if there is an old one, delete AND make sure it is gone 
-do {wait(2);} while(File.exists(tempfile)); 
-
-File.saveString(txtImg,tempfile);
-//open it once it is available
-do {wait(2);} while(!File.exists(tempfile));
-
-run("Text Image... ", "open=["+tempfile+"]"); 
-
-//remove the 1st (rowname) column
-getDimensions(width, height, tempchannels, slices, frames);
-makeRectangle(1, 0, width, height);	
-run("Crop");
-
-rename("temp");
-run("Reslice [/]...", "output=1.000 start=Top avoid");
+	{
+	tablename="Results"+L_currentwell+L_signal+L_compartment+".xls";
+	if(L_TWindow!="") file=L_currentpath +L_TWindow+File.separator+ tablename; 
+		else file= L_currentpath + tablename; 
 	
-rename(L_signal+L_compartment);
-run("Reslice [/]...", "output=1.000 start=Top rotate avoid");
-rename(L_signal+L_compartment+"T"); //transposed version created
-selectWindow("temp"); close();
-a=File.delete(tempfile); //clean up but can continue
-}
+	if (!File.exists(file)) return false;  // now we have a third optional compartment "soma" which might not exist
+	
+	tempfile=L_currentpath+"tempResults.csv";
+	
+	//print(tablename);
+	
+	txtImg= replace(File.openAsString(file), "\t", ","); //xls file full of tabs, looks like we need commas for run("Text Image..."
+	txtImg=substring(txtImg, indexOf(txtImg, "\n")+1); //remove first line which is a header
+	
+	if (File.exists(tempfile)) a=File.delete(tempfile); //if there is an old one, delete AND make sure it is gone 
+	do {wait(2);} while(File.exists(tempfile)); 
+	
+	File.saveString(txtImg,tempfile);
+	//open it once it is available
+	do {wait(2);} while(!File.exists(tempfile));
+	
+	run("Text Image... ", "open=["+tempfile+"]"); 
+	
+	//remove the 1st (rowname) column
+	getDimensions(width, height, tempchannels, slices, frames);
+	makeRectangle(1, 0, width, height);	
+	run("Crop");
+	
+	rename("temp");
+	run("Reslice [/]...", "output=1.000 start=Top avoid");
+		
+	rename(L_signal+L_compartment);
+	run("Reslice [/]...", "output=1.000 start=Top rotate avoid");
+	rename(L_signal+L_compartment+"T"); //transposed version created
+	selectWindow("temp"); close();
+	a=File.delete(tempfile); //clean up but can continue
+	
+	return true;
+	}
 
 
 
@@ -3990,7 +4057,8 @@ function generateNormalisedImage(method, inputimage, outputimage, width, height,
 function saveCellbyTimeFileset(inF, outF, NormoutF, CondensedF, CondenseFac, pathkernel, width, cells, normmethod, basepoints)
 {
     //using an input cell-by-time images, generate output files of data as is, normalised version and, if defined, a compressed version	
-
+	//adapt to possible non existent compartment "soma" i.e. inF may not exist
+	if (!isOpen(inF)) return false;
     selectWindow(inF); makeRectangle(0,0,0,0); run("Enhance Contrast", "saturated=0.35"); //clear selections and normalise contrast
 	run("Canvas Size...", "width="+width+" height="+cells+" position=Top-Center zero"); // removing blank row left by cells excluded by thresholding
 	generateNormalisedImage(normmethod, inF, NormoutF, width, cells, basepoints); //usage bycell|byvalue, imagenameprefix, imagenamepostfix, width, height, special-parameter -> seeks prevfix+postfix, outputs prefix+Normalised
@@ -4002,7 +4070,9 @@ function saveCellbyTimeFileset(inF, outF, NormoutF, CondensedF, CondenseFac, pat
 		saveAs("Tiff", pathkernel +CondensedF);  close();
 		}
 	else close();		
+	
 	selectWindow(inF); 	saveAs("Tiff", pathkernel +outF); close();
+	return true;
 	}
 
 	
@@ -4634,11 +4704,13 @@ stop;
 // v5d29m    020223MJC typo in previous minor bugfix!!: line 3159 for single file was out of date, now: for (j=0;j<lengthOf(ThresholdTypes);j++) {run("Select All");
  run("Duplicate...", "title="+L_SignalNamesRGB[i]+ThresholdTypes[j]+" duplicate");};
 //v5e1a		240212-13MJC introduced an adaptive band algorithm I have generated and checked seperately, improve, debug and adjust to fit this script
+//v5e2		240318-21MJC expanded adaptive band to whole cell "soma" mode, introduced new compartment - seems to work in Segmentation, and collation
 
 // TODO ** should generate compressed versions of ratio data that include Ca data because these have many timepoints and cannot be aligned as they are
 // TODO *  use passed parameter array in main functions
 
 */
+
 
 
 
