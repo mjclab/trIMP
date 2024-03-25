@@ -3353,6 +3353,7 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 
 	
 
+
 	//now the Shape features
 	ShapeFeaturesExist=true;//default
 	tablename= "Results"+L_well+"ROI-SpatialFeaturesFromCaMAXproj"+".xls";
@@ -3368,7 +3369,7 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 	
 	for (i=0; i<L_channels; i++) 
 		{ //for KTR L_SignalNamesRGB there are two compartments
-			for (j=0; j<compartment.length; j++) 
+		for (j=0; j<compartment.length; j++) 
 				{
 				success=ExtractIvTmean_v2(L_path+ L_SegmentationFolder + File.separator, L_well, L_SignalNamesRGB[i],compartment[j], L_TWindow); //returns e.g. ERKnuc and ERKnucT
 				if (j==2) SomaCompartmentExists[i]= success; // otherwise return value not used
@@ -3378,15 +3379,16 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 			L_numtimepoints[i]= getWidth(); //width; // get the numL_cells and numTPs from each since the calcium one is [2] and has more TP
 		}
 		//Above loop creates JNKnuc, JNKband, ERKnuc, ERKband, JNKnucT, JNKbandT, ERKnucT, ERKbandT and same for Ca now
-		
+
 	if(L_CalciumChannel!=-1)//last line does the Ca if it exists - only for nuclear region for now WARNING!!!!!!!!!!!
 		{
-		ExtractIvTmean_v2(L_path +L_SegmentationFolder + File.separator, L_well, L_SignalNamesRGB[L_CalciumChannel-1],"big"+compartment[0], L_TWindow); selectWindow(L_SignalNamesRGB[L_CalciumChannel-1]+"big"+compartment[0]); close(); //only need the "T" transposed version; nuc for ca, and dont need the depth version //creates uneroded CabignucT, Cabignuc not CanucT, Canuc because this ROI is not eroded
-		ExtractIvTmean_v2(L_path +L_SegmentationFolder + File.separator, L_well, "Condensed"+L_SignalNamesRGB[L_CalciumChannel-1],compartment[0], L_TWindow); selectWindow("Condensed"+L_SignalNamesRGB[L_CalciumChannel-1]+compartment[0]+"T"); close(); // only need the untransposed verson; use the condensed calcium for thresholding becayse fast calcium alignment can fail using nanoJ in version 5d29j
+		success=ExtractIvTmean_v2(L_path +L_SegmentationFolder + File.separator, L_well, L_SignalNamesRGB[L_CalciumChannel-1],"big"+compartment[0], L_TWindow);
+			if(success) {selectWindow(L_SignalNamesRGB[L_CalciumChannel-1]+"big"+compartment[0]);  close(); }//only need the "T" transposed version; nuc for ca, and dont need the depth version //creates uneroded CabignucT, Cabignuc not CanucT, Canuc because this ROI is not eroded
+		success=ExtractIvTmean_v2(L_path +L_SegmentationFolder + File.separator, L_well, "Condensed"+L_SignalNamesRGB[L_CalciumChannel-1],compartment[0], L_TWindow); 
+			if(success) {selectWindow("Condensed"+L_SignalNamesRGB[L_CalciumChannel-1]+compartment[0]+"T"); close(); }// only need the untransposed verson; use the condensed calcium for thresholding becayse fast calcium alignment can fail using nanoJ in version 5d29j
 		}
 		
 	//ExtractIvTmean flashes on the screen, v2 reads text direct to img with a temp file, no Results table or flashing
-
 
 		
 	if(ShapeFeaturesExist) 
@@ -3461,15 +3463,15 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 	//for (j=0;j<2;j++) {selectWindow(L_SignalNamesRGB[L_SegmentationChannel-1]+compartment[j]); close();} 
 
 	// this section generates a stack of all values all compartments for each channel to apply thresholding
-	
-	for (i=0; i<L_channels; i++) 
-		{
-		if (i==L_CalciumChannel-1)  // this means Canucvalues will not exist, don't tru to close it
+
+		for (i=0; i<L_channels; i++) 
+			{
+			if ((i==L_CalciumChannel-1)&& (CondenseFactor!=1)) // this means Canucvalues will not exist, don't tru to close it
 			{ // N.B. - here we will not threshold on cyto Ca even if reporter may in some cases be not constrained to nucleus
 			// this is a workaround for nanoJ alignment failure: risk that fastCa not aligned but condensed data in merge is OK -> threshold the condensed version only
 			selectWindow("Condensed" +L_SignalNamesRGB[i]+ compartment[0]); 
-			run("Duplicate...", "title="+L_SignalNamesRGB[i] + "values"+" duplicate");  // note here we lose the "Condensed" as thresholding can be applied systematically
-			selectWindow("Condensed" +L_SignalNamesRGB[i] + compartment[0]); close();
+			run("Duplicate...", "title="+L_SignalNamesRGB[i] + "values"+" duplicate");  // note here we lose the "Condensed" as thresholding can be applied systematically	
+			selectWindow("Condensed" +L_SignalNamesRGB[i] + compartment[0]); close(); //don't close it if it  does not exist
 			}
 		else
 			{
@@ -3486,7 +3488,7 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 				run("Concatenate...", ConcatenateString);				
 				}
 			}	
-		
+
 		// close all compartment images including the calcium one that was not actually used in the present script 	
 		for (j=0;j<compartment.length;j++) 
 			{
@@ -3494,12 +3496,8 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 			if (isOpen(ArrayName)) {selectWindow(ArrayName); close();} //as soma might not exist 	
 			} //closes ALL nuc/band compartment images now and we only have [Channel]values //- ERKnuc, JNKnuc, ERKband, JNKband; now we have ErkValues, JNKValues	
 		
-		
-		if (nSlices!=1) //catch error when there happens to be only a single plane in the experiment 
-			{
-			//selectWindow(L_SignalNamesRGB[i] + "values");
-			//print(nSlices);
-			
+			if (nSlices!=1) //catch error when there happens to be only a single plane in the experiment 
+			{ 			//selectWindow(L_SignalNamesRGB[i] + "values");			//print(nSlices);
 			for (k=0; k< lengthOf(ThresholdTypes); k++) // use the ThresholdTypes string array
 				{
 				selectWindow(L_SignalNamesRGB[i] + "values");
@@ -3514,7 +3512,7 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 		else
 			{
 			selectWindow(L_SignalNamesRGB[i] + "values");	
-			for (k=0;k<lengthOf(ThresholdTypes);k++)
+				for (k=0;k<lengthOf(ThresholdTypes);k++)
 				{
 				run("Select All"); 
 				run("Duplicate...", "title="+L_SignalNamesRGB[i]+ThresholdTypes[k]+" duplicate");
@@ -3606,12 +3604,9 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 				{
 					selectWindow(L_SignalNamesRGB[i]+ThresholdTypes[k]); 
 					L_checkvalue[i+k*L_channels] = getPixel(L_cell,0); 
-					//debug print("readings for " + L_SignalNamesRGB[i]+ThresholdTypes[j] + " is " + L_checkvalue[i+j*L_channels]);
 				}	
 			}
 		AbsMinPass=1; AbsMaxPass=1; AvgMinPass=1; AvgMaxPass=1;
-		// DEBUG firstchanneltofail=-1;
-		// DEBUG - this seems to fail for the calcium channel
 		for(i=0;i<L_channels-1;i++) 
 			{
 			AbsMinPass *= (L_checkvalue[i]>=AbsMinThreshold[i]);
@@ -3683,7 +3678,6 @@ function ThresholdandCalcSignals(L_SegmentationChannel, L_CalciumChannel, L_Rati
 							makeRectangle(0, L_cell, numFeatures, 1);
 							run("Copy");
 							selectWindow("ShapeFeatures_"+compartment[j]+ "_Thresholded");
-//BUG HERE what is nuFeatiures?
 							makeRectangle(0, L_cellspastthreshold, numFeatures, 1);
 							run("Paste");
 							}
