@@ -2615,8 +2615,8 @@ function SegmentImages(L_SegmentationChannel, L_cytoChannel, L_CalciumChannel, L
 		
 			// now we can work with the trimmed ROI list
 			// NB use no overlap bands only relevant for cyto
-			CreateROIs("Nuclear", SavePath , well, "MAXproj_nuclei", L_ErodeCycles, L_BandWidth, UseNoOverlapBands);//create nuclear ROIs using parameters L_experimentpath, well, MAXproj_nuclei, ErodeCycles
-	
+			CreateROIs("Nuclear", SavePath , well, "MAXproj_nuclei", L_ErodeCycles, L_BandWidth, UseNoOverlapBands);//create nuclear ROIs using parameters L_experimentpath, well, MAXproj_nuclei, ErodeCyclesprint(
+
 	
 //debug
 		
@@ -2630,7 +2630,7 @@ function SegmentImages(L_SegmentationChannel, L_cytoChannel, L_CalciumChannel, L
 				selectWindow(sourceformaxcyto);
 				run("Select All"); //in case caller left random selection on the image, this is not currently supported
 				run("Duplicate...", "title=forMaxcyto");
-				sourceformaxcyto="forMaxcyto"; // now the existing data image is freed
+ 				sourceformaxcyto="forMaxcyto"; // now the existing data image is freed
 				selectWindow(sourceformaxcyto);
 				//run("Subtract Background...", "rolling=50");
 				run("Median...", "radius=2"); //needed or get a lot of little dots?
@@ -2746,7 +2746,7 @@ function SegmentImages(L_SegmentationChannel, L_cytoChannel, L_CalciumChannel, L
 			
 			run("Set Measurements...", "mean redirect=None decimal=3"); //now we have a separate shape file, no need for areas here
 			//ROItype=newArray("nuc", "band");//NB compartment is nuc and cyt but I need nuc and band!
-			
+		
 			for(currentcompartment=0;currentcompartment<compartment.length;currentcompartment++ )
 				{//EACH COMPARTMENT, check soma exists
 				ROIfile = 	SavePath + "ROI"+compartment[currentcompartment]+well+".zip";
@@ -2774,7 +2774,7 @@ function SegmentImages(L_SegmentationChannel, L_cytoChannel, L_CalciumChannel, L
 			if((CalciumChannel!=-1)&&(CondenseFactor==1))  //get a fastCa substitute from the merged channels if necessary
 				{selectWindow(L_SignalNamesRGB[CalciumChannel-1]+well+".tif"); 	run("Duplicate...", "title=SubstituteForFastCalcium" +" duplicate");}
 			
-			
+		
 			
 			if(CalciumChannel!=-1) 
 				{
@@ -2789,7 +2789,7 @@ function SegmentImages(L_SegmentationChannel, L_cytoChannel, L_CalciumChannel, L
 					}
 					else selectWindow("SubstituteForFastCalcium"); //this was not generated earlier from the calcium frame, when there is only 1 and will do for the next steps
 						
-				
+			
 					rename("Fastcalcium"+well+".tif");
 					currentchannel=CalciumChannel-1;//2;//calcium	
 			
@@ -2825,7 +2825,7 @@ function SegmentImages(L_SegmentationChannel, L_cytoChannel, L_CalciumChannel, L
 		}
 		
 				
-			
+
 				
 		//close all merged channels outside the  conditional loop
 		for(currentchannel=0;currentchannel<Channels;currentchannel++) //{selectWindow(L_SignalNamesRGB[currentchannel]+well+".tif"); close();} // when using F4DR, may need to close 3 times
@@ -2836,8 +2836,11 @@ function SegmentImages(L_SegmentationChannel, L_cytoChannel, L_CalciumChannel, L
 			
 	//I moved this from the above loop as it was getting left behind
 	selectWindow("MAXproj_nuclei");	run("Close"); //   segmentation image saved earlier
-	isOpen("MAXproj_cyto") {selectWindow("MAXproj_cyto"); close();}
+
+	if (isOpen("MAXproj_cyto")) {selectWindow("MAXproj_cyto"); close();}
+		
 	}
+
 
 
 function SaveDataFromSelected2Dtimecourse(Method, L_verbosity,  savenameandpath)
@@ -4719,7 +4722,7 @@ stop;
 // v5d29m    020223MJC typo in previous minor bugfix!!: line 3159 for single file was out of date, now: for (j=0;j<lengthOf(ThresholdTypes);j++) {run("Select All");
  run("Duplicate...", "title="+L_SignalNamesRGB[i]+ThresholdTypes[j]+" duplicate");};
 //v5e1a		240212-13MJC introduced an adaptive band algorithm I have generated and checked seperately, improve, debug and adjust to fit this script
-//v5e2a		240318-21MJC expanded adaptive band to whole cell "soma" mode, introduced new compartment - seems to work in Segmentation, and collation
+//v5e2a		240318-25MJC expanded adaptive band to whole cell "soma" mode, introduced new compartment - seems to work in Segmentation, and collation
 
 // TODO ** should generate compressed versions of ratio data that include Ca data because these have many timepoints and cannot be aligned as they are
 // TODO *  use passed parameter array in main functions
